@@ -6,105 +6,116 @@
 ; Recognizes strings of the form (^n )^n +
 (def paren-grammar
   (make-grammar :goal nil
+    {:lparen "("
+     :rparen ")"}
     [:goal :list
      :list #{[:list :pair] :pair}
-     :pair #{["(" :pair ")"] ["(" ")"]}]))
+     :pair #{[:lparen :pair :rparen] [:lparen :rparen]}]))
 
 ; Firsts sets
 (def paren-firsts
-  {:goal #{"("}
-   :pair #{"("}
-   :list #{"("}
-   "("   #{"("}
-   ")"   #{")"}
-   ""    #{""}
-   :eof  #{:eof}})
+  {:goal #{:lparen}
+   :pair #{:lparen}
+   :list #{:lparen}
+   :lparen #{:lparen}
+   :rparen #{:rparen}
+   :asterism/empty #{:asterism/empty}
+   :asterism/eof #{:asterism/eof}})
 
 ; CC for the paren-grammar
 (def paren-cc [
   ; cc0
-  #{[:goal [:list] 0 :eof]
-    [:list [:list :pair] 0 "("]
-    [:list [:list :pair] 0 :eof]
-    [:list [:pair] 0 "("]
-    [:list [:pair] 0 :eof]
-    [:pair ["(" :pair ")"] 0 "("]
-    [:pair ["(" :pair ")"] 0 :eof]
-    [:pair ["(" ")"] 0 "("]
-    [:pair ["(" ")"] 0 :eof]}
+  #{[:goal [:list] 0 :asterism/eof]
+    [:list [:list :pair] 0 :lparen]
+    [:list [:list :pair] 0 :asterism/eof]
+    [:list [:pair] 0 :lparen]
+    [:list [:pair] 0 :asterism/eof]
+    [:pair [:lparen :pair :rparen] 0 :lparen]
+    [:pair [:lparen :pair :rparen] 0 :asterism/eof]
+    [:pair [:lparen :rparen] 0 :lparen]
+    [:pair [:lparen :rparen] 0 :asterism/eof]}
   ; cc1
-  #{[:goal [:list] 1 :eof]
-    [:list [:list :pair] 1 :eof]
-    [:list [:list :pair] 1 "("]
-    [:pair ["(" :pair ")"] 0 :eof]
-    [:pair ["(" :pair ")"] 0 "("]
-    [:pair ["(" ")"] 0 :eof]
-    [:pair ["(" ")"] 0 "("]}
+  #{[:goal [:list] 1 :asterism/eof]
+    [:list [:list :pair] 1 :asterism/eof]
+    [:list [:list :pair] 1 :lparen]
+    [:pair [:lparen :pair :rparen] 0 :asterism/eof]
+    [:pair [:lparen :pair :rparen] 0 :lparen]
+    [:pair [:lparen :rparen] 0 :asterism/eof]
+    [:pair [:lparen :rparen] 0 :lparen]}
   ; cc2
-  #{[:list [:pair] 1 :eof]
-    [:list [:pair] 1 "("]}
+  #{[:list [:pair] 1 :asterism/eof]
+    [:list [:pair] 1 :lparen]}
   ; cc3
-  #{[:pair ["(" :pair ")"] 0 ")"]
-    [:pair ["(" :pair ")"] 1 :eof]
-    [:pair ["(" :pair ")"] 1 "("]
-    [:pair ["(" ")"] 0 ")"]
-    [:pair ["(" ")"] 1 :eof]
-    [:pair ["(" ")"] 1 "("]}
+  #{[:pair [:lparen :pair :rparen] 0 :rparen]
+    [:pair [:lparen :pair :rparen] 1 :asterism/eof]
+    [:pair [:lparen :pair :rparen] 1 :lparen]
+    [:pair [:lparen :rparen] 0 :rparen]
+    [:pair [:lparen :rparen] 1 :asterism/eof]
+    [:pair [:lparen :rparen] 1 :lparen]}
   ; cc4
-  #{[:list [:list :pair] 2 :eof]
-    [:list [:list :pair] 2 "("]}
+  #{[:list [:list :pair] 2 :asterism/eof]
+    [:list [:list :pair] 2 :lparen]}
   ; cc5
-  #{[:pair ["(" :pair ")"] 2 :eof]
-    [:pair ["(" :pair ")"] 2 "("]}
+  #{[:pair [:lparen :pair :rparen] 2 :asterism/eof]
+    [:pair [:lparen :pair :rparen] 2 :lparen]}
   ; cc6
-  #{[:pair ["(" :pair ")"] 0 ")"]
-    [:pair ["(" :pair ")"] 1 ")"]
-    [:pair ["(" ")"] 0 ")"]
-    [:pair ["(" ")"] 1 ")"]}
+  #{[:pair [:lparen :pair :rparen] 0 :rparen]
+    [:pair [:lparen :pair :rparen] 1 :rparen]
+    [:pair [:lparen :rparen] 0 :rparen]
+    [:pair [:lparen :rparen] 1 :rparen]}
   ; cc7
-  #{[:pair ["(" ")"] 2 :eof]
-    [:pair ["(" ")"] 2 "("]}
+  #{[:pair [:lparen :rparen] 2 :asterism/eof]
+    [:pair [:lparen :rparen] 2 :lparen]}
   ; cc8
-  #{[:pair ["(" :pair ")"] 3 :eof]
-    [:pair ["(" :pair ")"] 3 "("]}
+  #{[:pair [:lparen :pair :rparen] 3 :asterism/eof]
+    [:pair [:lparen :pair :rparen] 3 :lparen]}
   ; cc9
-  #{[:pair ["(" :pair ")"] 2 ")"]}
+  #{[:pair [:lparen :pair :rparen] 2 :rparen]}
   ; cc10
-  #{[:pair ["(" ")"] 2 ")"]}
+  #{[:pair [:lparen :rparen] 2 :rparen]}
   ; cc11
-  #{[:pair ["(" :pair ")"] 3 ")"]}])
+  #{[:pair [:lparen :pair :rparen] 3 :rparen]}])
 
 
 
 (facts "on trivial grammar construction"
-  (let [g (make-grammar :goal nil [:goal ""])]
-    (:terminals g) => #{""}
+  (let [g (make-grammar :goal nil {} [:goal "abc"])]
+    (:terminals g) => {:string-abc {:matcher "abc"}
+                       :asterism/empty {:matcher ""}}
     (:nonterminals g) => #{:goal}
     (:start g) => :goal
-    (:productions g) => {:goal #{[""]}}))
+    (:productions g) => {:goal #{[:string-abc]}}))
 
 (facts "on discovering terminals"
   (let [r345 #"345" ; Patterns use identity
         r9 #"9"     ; to judge equality
-        g (make-grammar :a nil
+        g (make-grammar :a nil {}
             [:a ["1" [[:b "2"]] :b r345]
              :b #{[#{"6" :a} r9] :a [7 :a 8]}])]
-    (:terminals g) => #{"1" "2" r345 "6" 7 8 r9}))
+    (:terminals g) => 
+      {:string-1 {:matcher "1"}
+       :string-2 {:matcher "2"}
+       :pattern-345 {:matcher r345}
+       :string-6 {:matcher "6"}
+       :long-7 {:matcher 7}
+       :long-8 {:matcher 8}
+       :pattern-9 {:matcher r9}
+       :asterism/empty {:matcher ""}}))
 
 (facts "on normalization"
-  (let [g (make-grammar :a nil
+  (let [g (make-grammar :a nil {}
             [:a [1 2]
              :b #{1 #{[2 3] [4 5]}}
              :c [1 #{2 [3 4]}]
              :d :a])
         p (:productions g)]
-    (:a p) => #{[1 2]}
-    (:b p) => #{[1] [2 3] [4 5]}
-    (:c p) => #{[1 2] [1 3 4]}
+    (:a p) => #{[:long-1 :long-2]}
+    (:b p) => #{[:long-1] [:long-2 :long-3] [:long-4 :long-5]}
+    (:c p) => #{[:long-1 :long-2] [:long-1 :long-3 :long-4]}
     (:d p) => #{[:a]}))
 
 (facts "on whitespace injection"
-  (let [g (make-grammar :a "BLANK"
+  (let [g (make-grammar :a "BLANK" {}
             [:a [1 2]
              :b #{[1 2] [3 4]}
              :c [1 #{2 3}]
@@ -112,38 +123,39 @@
              :e (no-ws 1 2)
              :f #{[1 (no-ws 2 3) 4]}])
         p (:productions g)]
-    (:a p) => #{[1 "BLANK" 2]}
-    (:b p) => #{[1 "BLANK" 2] [3 "BLANK" 4]}
-    (:c p) => #{[1 "BLANK" 2] [1 "BLANK" 3]}
-    (:d p) => #{[:a "BLANK" :b "BLANK" :c]}
-    (:e p) => #{[1 2]}
-    (:f p) => #{[1 "BLANK" 2 3 "BLANK" 4]}))
+    (:a p) => #{[:long-1 :string-BLANK :long-2]}
+    (:b p) => #{[:long-1 :string-BLANK :long-2] [:long-3 :string-BLANK :long-4]}
+    (:c p) => #{[:long-1 :string-BLANK :long-2] [:long-1 :string-BLANK :long-3]}
+    (:d p) => #{[:a :string-BLANK :b :string-BLANK :c]}
+    (:e p) => #{[:long-1 :long-2]}
+    (:f p) => #{[:long-1 :string-BLANK :long-2 :long-3 :string-BLANK :long-4]}))
 
 (facts "on computing FIRST(x)"
-  (let [g (make-grammar :a nil
+  (let [g (make-grammar :a nil {}
             [:a #{"a1" ["a2" "a3"] ""}
              :b #{"b1" [#{"b2" "b3"} "b4"]}
              :c [:a :b]])
         firsts (generate-first-sets g)]
-    (:a firsts) => #{"a1" "a2" ""}
-    (:b firsts) => #{"b1" "b2" "b3"}
-    (:c firsts) => #{"a1" "a2" "b1" "b2" "b3"}
+    (:a firsts) => #{:string-a1 :string-a2 :asterism/empty}
+    (:b firsts) => #{:string-b1 :string-b2 :string-b3}
+    (:c firsts) => #{:string-a1 :string-a2 :string-b1 :string-b2 :string-b3}
     (generate-first-sets paren-grammar) => paren-firsts))
 
 (facts "on determining state transitions in CC"
-  (let [nxts   [ :eof  "("   ")" :list :pair ]
-        table [[  nil   3    nil    1     2  ]   ; 0
-               [  nil   3    nil   nil    4  ]   ; 1
-               [  nil  nil   nil   nil   nil ]   ; 2
-               [  nil   6     7    nil    5  ]   ; 3
-               [  nil  nil   nil   nil   nil ]   ; 4
-               [  nil  nil    8    nil   nil ]   ; 5
-               [  nil   6    10    nil    9  ]   ; 6
-               [  nil  nil   nil   nil   nil ]   ; 7
-               [  nil  nil   nil   nil   nil ]   ; 8
-               [  nil  nil   11    nil   nil ]   ; 9
-               [  nil  nil   nil   nil   nil ]   ; 10
-               [  nil  nil   nil   nil   nil ]]] ; 11
+  (let [eof :asterism/eof
+        nxts   [  eof :lparen :rparen :list :pair ]
+        table [[  nil    3      nil     1     2   ]   ; 0
+               [  nil    3      nil    nil    4   ]   ; 1
+               [  nil   nil     nil    nil   nil  ]   ; 2
+               [  nil    6       7     nil    5   ]   ; 3
+               [  nil   nil     nil    nil   nil  ]   ; 4
+               [  nil   nil      8     nil   nil  ]   ; 5
+               [  nil    6      10     nil    9   ]   ; 6
+               [  nil   nil     nil    nil   nil  ]   ; 7
+               [  nil   nil     nil    nil   nil  ]   ; 8
+               [  nil   nil     11     nil   nil  ]   ; 9
+               [  nil   nil     nil    nil   nil  ]   ; 10
+               [  nil   nil     nil    nil   nil  ]]] ; 11
     (doseq [[i expected] (into {} (map-indexed vector table))
             [j lookahead] (map vector expected nxts)]
       (goto (paren-cc i) lookahead paren-firsts paren-grammar)
@@ -160,25 +172,25 @@
   (let [cc0 (cc0 paren-firsts paren-grammar)
         {:keys [action goto]} (build-tables cc0 paren-firsts paren-grammar)
         actions {
-          0 {"(" [:shift (paren-cc 3)]}
-          1 {:eof :accept
-             "(" [:shift (paren-cc 3)]}
-          2 {:eof [:reduce :list [:pair]]
-             "(" [:reduce :list [:pair]]}
-          3 {"(" [:shift (paren-cc 6)]
-             ")" [:shift (paren-cc 7)]}
-          4 {:eof [:reduce :list [:list :pair]]
-             "(" [:reduce :list [:list :pair]]}
-          5 {")" [:shift (paren-cc 8)]}
-          6 {"(" [:shift (paren-cc 6)]
-             ")" [:shift (paren-cc 10)]}
-          7 {:eof [:reduce :pair ["(" ")"]]
-             "(" [:reduce :pair ["(" ")"]]}
-          8 {:eof [:reduce :pair ["(" :pair ")"]]
-             "(" [:reduce :pair ["(" :pair ")"]]}
-          9 {")" [:shift (paren-cc 11)]}
-          10 {")" [:reduce :pair ["(" ")"]]}
-          11 {")" [:reduce :pair ["(" :pair ")"]]}}
+          0 {:lparen [:shift (paren-cc 3)]}
+          1 {:asterism/eof :accept
+             :lparen [:shift (paren-cc 3)]}
+          2 {:asterism/eof [:reduce :list [:pair]]
+             :lparen [:reduce :list [:pair]]}
+          3 {:lparen [:shift (paren-cc 6)]
+             :rparen [:shift (paren-cc 7)]}
+          4 {:asterism/eof [:reduce :list [:list :pair]]
+             :lparen [:reduce :list [:list :pair]]}
+          5 {:rparen [:shift (paren-cc 8)]}
+          6 {:lparen [:shift (paren-cc 6)]
+             :rparen [:shift (paren-cc 10)]}
+          7 {:asterism/eof [:reduce :pair [:lparen :rparen]]
+             :lparen [:reduce :pair [:lparen :rparen]]}
+          8 {:asterism/eof [:reduce :pair [:lparen :pair :rparen]]
+             :lparen [:reduce :pair [:lparen :pair :rparen]]}
+          9 {:rparen [:shift (paren-cc 11)]}
+          10 {:rparen [:reduce :pair [:lparen :rparen]]}
+          11 {:rparen [:reduce :pair [:lparen :pair :rparen]]}}
         gotos {
           0 {:list (paren-cc 1)
              :pair (paren-cc 2)}
@@ -192,11 +204,11 @@
 
 ; This will change drastically when scanning actually works
 (facts "on making a parser"
-  (let [p (parser {:ws nil}
+  (let [p (parser {:whitespace nil}
             :goal :first
             :first ["a" "b"])]
-    (p ["a"]) => :asterism.parser/failure
-    (p ["a" "b" :eof]) => 
+    (p [:string-a]) => :asterism.parser/failure
+    (p [:string-a :string-b :asterism/eof]) => 
       {:tag :goal
        :children [{:tag :first
-                   :children ["a" "b"]}]}))
+                   :children [:string-a :string-b]}]}))

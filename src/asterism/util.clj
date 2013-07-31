@@ -23,5 +23,14 @@
 (defn map-map [fun coll]
   (into {} (map (fn [[k v]] [k (fun k v)]) coll)))
 
+(defmacro set-for [& body]
+  `(into #{} (for ~@body)))
+
+(defmacro vec-for [& body]
+  `(into [] (for ~@body)))
+
+(defmacro map-for [decls & body]
+  `(into {} (for ~decls (vector ~@body))))
+
 (defn regex? [x]
   (instance? java.util.regex.Pattern x))

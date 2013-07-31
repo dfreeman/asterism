@@ -2,20 +2,50 @@
   (:require [clojure.set :as set]
             [asterism.util :as util]))
 
+;;;;;;;; Terminal Processing ;;;;;;;;;
 
-;;;;;;;;;;;;;;;; Misc ;;;;;;;;;;;;;;;;
+(defn- matcher-for [raw-element]
+  (if (util/regex? raw-element)
+    {:pattern (str raw-element)}
+    raw-element))
 
-(defn- nt?
-  "For now, nonterminals are just keywords."
-  [x]
-  (and (not= :eof x) (keyword? x)))
+(defn- matcher-map [raw-terminals]
+  (let [terms (util/set-map canonical-terminal raw-terminals)
+        by-id (into {} (map #(vector (:id %) %) terms))
+        by-matcher (into {} (map #(vector (matcher-for (:matcher %)) %) terms))]
+    (merge by-id by-matcher)))
 
-(defn- extract-terminals [rhs]
-  (set (cond
-         (or (sequential? rhs) (set? rhs))
-           (mapcat extract-terminals rhs)
-         (nt? rhs) nil
-         :else [rhs])))
+(defn- canonical-id [raw-element]
+  (let [type (.toLowerCase (.getSimpleName (type raw-element)))]
+    (keyword (str type "-" raw-element))))
+
+(defn- canonical-terminal [[id value]]
+  (if (map? value)
+    (if (:matcher value)
+      (assoc value :id id)
+      (throw (Exception. (str "Invalid terminal definition: " value))))
+    {:id id :matcher value}))
+
+(defn- process-terminals [nonterminals explicits prods]
+  (let [starting-terms (into explicits {:asterism/empty ""})
+        terminals (atom (matcher-map starting-terms))
+        prods (util/map-for [[lhs prod] prods] lhs
+                (util/set-for [alternative prod]
+                  (util/vec-for [element alternative]
+                    (if (contains? nonterminals element)
+                      element
+                      (let [matcher (matcher-for element)
+                            id (canonical-id element)]
+                        (if (contains? @terminals matcher)
+                          (:id (get @terminals matcher))
+                          (do 
+                            (swap! terminals assoc
+                              matcher (canonical-terminal [id element]))
+                            id)))))))
+        terminals (->> @terminals
+                    (map (fn [[matcher term]] [(:id term) (dissoc term :id)]))
+                    (into {}))]
+    [terminals prods]))
 
 ;;;;;;;;; FIRST(x) Generation ;;;;;;;;
 
@@ -29,20 +59,21 @@
          current-set #{}]
     (let [node (first rhs-nodes)
           node-firsts (get first-sets node)]
-      (if (or (not (contains? node-firsts ""))
+      (if (or (not (contains? node-firsts :asterism/empty))
               (empty? (rest rhs-nodes)))
         (set/union current-set node-firsts)
         (recur (rest rhs-nodes)
                (set/union
                  current-set
-                 (set/difference node-firsts #{""})))))))
+                 (set/difference node-firsts #{:asterism/empty})))))))
 
 (defn generate-first-sets
   "Returns a map from each terminal and non-terminal in the given grammar
   to the set of possible leftmost terminals for each."
   [{:keys [terminals nonterminals productions]}]
-  (let [first-sets (atom (-> {"" #{""} :eof #{:eof}}
-                             (into (map #(vector % #{%}) terminals))
+  (let [first-sets (atom (-> {:asterism/empty #{:asterism/empty}
+                              :asterism/eof #{:asterism/eof}}
+                             (into (map #(vector % #{%}) (keys terminals)))
                              (into (map #(vector % #{}) nonterminals))))]
     (loop [start-value @first-sets]
       (doseq [[lhs rhs-set] productions
@@ -64,7 +95,7 @@
     (loop [items core]
       (doseq [[lhs rhs pos la] items]
         (if-let [nxt (nth rhs pos nil)]
-          (if (nt? nxt)
+          (if (contains? (:nonterminals grammar) nxt)
             (let [rst (conj (vec (drop (inc pos) rhs)) la)
                   prods (get (:productions grammar) nxt)]
               (swap! updated-set set/union
@@ -82,7 +113,7 @@
   (let [start (:start grammar)
         start-prods (start (:productions grammar))]
     (->> start-prods
-      (util/set-map (fn [rhs] [start rhs 0 :eof]))
+      (util/set-map (fn [rhs] [start rhs 0 :asterism/eof]))
       (closure firsts grammar))))
 
 ; LR(1) item: [lhs rhs position lookahead]
@@ -132,7 +163,7 @@
       (doseq [[lhs rhs pos la] cc-i]
         (cond (< pos (count rhs))
                 (let [nxt (get rhs pos)]
-                  (when-not (nt? nxt)
+                  (when-not (contains? (:nonterminals grammar) nxt)
                     (swap! action-table
                            assoc-in
                            [cc-i nxt]
@@ -147,10 +178,10 @@
 
               (and (= pos (count rhs))
                    (= lhs (:start grammar))
-                   (= la :eof))
+                   (= la :asterism/eof))
                 (swap! action-table
                        assoc-in
-                       [cc-i :eof]
+                       [cc-i :asterism/eof]
                        :accept)))
       (doseq [n (:nonterminals grammar)]
         (let [cc-j (goto cc-i n firsts grammar)]
@@ -197,13 +228,18 @@
 
 ;;;;;;;;;;;;;;;; Setup ;;;;;;;;;;;;;;;
 
-(defn make-grammar [start ws prods]
+(defn make-grammar [start whitespace explicit-terminals prods]
   (let [prods (->> prods
                 (apply hash-map)
-                (util/map-map #(normalize ws %2)))]
+                (util/map-map #(normalize whitespace %2)))
+        nonterminals (set (keys prods))
+        [terminals prods] (process-terminals 
+                            nonterminals 
+                            explicit-terminals
+                            prods)]
     {:start start
-     :terminals (extract-terminals (vals prods))
-     :nonterminals (set (keys prods))
+     :terminals terminals
+     :nonterminals nonterminals
      :productions prods}))
 
 (defn- make-parser [cc0 start action goto on-shift on-reduce on-fail]
@@ -211,15 +247,15 @@
     (loop [input input
            stack (list [cc0 start])]
       (let [[state tree] (first stack)
-            word (first input)
-            table-value (get-in action [state word])]
+            token (first input)
+            table-value (get-in action [state token])]
         (case (if (sequential? table-value) (first table-value) table-value)
           :accept
-            (if (= word :eof)
+            (if (= token :asterism/eof)
               (let [trees (reverse (map second stack))
                     [[lhs] child-trees] (split-at 1 trees)]
                   (on-reduce lhs child-trees))
-              (on-fail state word))
+              (on-fail state token))
 
           :reduce
             (let [[_ lhs rhs] table-value
@@ -230,27 +266,27 @@
 
           :shift
             (let [[_ next-state] table-value]
-              (recur (rest input) (conj stack [next-state (on-shift word)])))
+              (recur (rest input) (conj stack [next-state (on-shift token)])))
 
-          (on-fail state word))))))
+          (on-fail state token))))))
 
-
-;;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;;
 
 (defn parser
   "Creates a parser for the given productions, using the given options."
   [opts & prods]
   (let [[opts prods] (if (map? opts) [opts prods] [{} (cons opts prods)])
         ; Extract options
-        {:keys [make-node make-leaf on-failure start ws]
+        {:keys [make-node make-leaf on-failure start whitespace terminals]
          :or {make-node (fn [lhs child-trees] {:tag lhs :children child-trees})
               make-leaf identity
               on-failure (constantly ::failure)
               start (first prods)
-              ws #"\s*"}} opts
+              whitespace #"\s*"
+              terminals {}}} opts
         ; Normalize the grammar proper        
-        grammar (make-grammar start ws prods)
-        ; Calculate some metadata
+        grammar (make-grammar start whitespace terminals prods)
+        ; Calculate the set of firsts and 0th CC set
         firsts (generate-first-sets grammar)
         cc0 (cc0 firsts grammar)
         ; Build action and goto tables
@@ -266,6 +302,7 @@
     {:no-ws true}))
 
 ;;;;;;;;;;; Sample Usage ;;;;;;;;;;;;;
+
 
 ; Recognizes simple arithmetic expressions w/ standard OoO
 (def simple-expression-parser
