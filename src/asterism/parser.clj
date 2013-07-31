@@ -4,17 +4,6 @@
 
 ;;;;;;;; Terminal Processing ;;;;;;;;;
 
-(defn- matcher-for [raw-element]
-  (if (util/regex? raw-element)
-    {:pattern (str raw-element)}
-    raw-element))
-
-(defn- matcher-map [raw-terminals]
-  (let [terms (util/set-map canonical-terminal raw-terminals)
-        by-id (into {} (map #(vector (:id %) %) terms))
-        by-matcher (into {} (map #(vector (matcher-for (:matcher %)) %) terms))]
-    (merge by-id by-matcher)))
-
 (defn- canonical-id [raw-element]
   (let [type (.toLowerCase (.getSimpleName (type raw-element)))]
     (keyword (str type "-" raw-element))))
@@ -25,6 +14,17 @@
       (assoc value :id id)
       (throw (Exception. (str "Invalid terminal definition: " value))))
     {:id id :matcher value}))
+
+(defn- matcher-for [raw-element]
+  (if (util/regex? raw-element)
+    {:pattern (str raw-element)}
+    raw-element))
+
+(defn- matcher-map [raw-terminals]
+  (let [terms (util/set-map canonical-terminal raw-terminals)
+        by-id (into {} (map #(vector (:id %) %) terms))
+        by-matcher (into {} (map #(vector (matcher-for (:matcher %)) %) terms))]
+    (merge by-id by-matcher)))
 
 (defn- process-terminals [nonterminals explicits prods]
   (let [starting-terms (into explicits {:asterism/empty ""})
