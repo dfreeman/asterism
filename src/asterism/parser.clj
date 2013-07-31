@@ -40,7 +40,7 @@
 (defn generate-first-sets
   "Returns a map from each terminal and non-terminal in the given grammar
   to the set of possible leftmost terminals for each."
-  [terminals nonterminals productions]
+  [{:keys [terminals nonterminals productions]}]
   (let [first-sets (atom (-> {"" #{""} :eof #{:eof}}
                              (into (map #(vector % #{%}) terminals))
                              (into (map #(vector % #{}) nonterminals))))]
@@ -55,22 +55,12 @@
 
 ;;;;;;;;;;;; CC Generation ;;;;;;;;;;;
 
-(defn cc0-core
-  "Generates the core for state 0 of the recognizer.
-  LR(1) items are represented as a vector of the form
-  [lhs rhs position lookahead]"
-  [grammar]
-  (let [start (:start grammar)
-        start-prods (start (:productions grammar))]
-    (util/set-map (fn [rhs] [start rhs 0 :eof]) start-prods)))
-
-(defn closure
+(defn- closure
   "Generates a closed state set from that set's core,
   iteratively including any items implied by those
   already in the set."
-  [core grammar]
-  (let [firsts (:firsts grammar)
-        updated-set (atom core)]
+  [firsts grammar core]
+  (let [updated-set (atom core)]
     (loop [items core]
       (doseq [[lhs rhs pos la] items]
         (if-let [nxt (nth rhs pos nil)]
@@ -85,47 +75,57 @@
         items
         (recur @updated-set)))))
 
+(defn cc0
+  "Generates the initial set in the canonical collection
+  for the given grammar."
+  [firsts grammar]
+  (let [start (:start grammar)
+        start-prods (start (:productions grammar))]
+    (->> start-prods
+      (util/set-map (fn [rhs] [start rhs 0 :eof]))
+      (closure firsts grammar))))
+
 ; LR(1) item: [lhs rhs position lookahead]
 (defn goto
   "Generates all possible LR(1) items that could result
   from recognizing `x` from the given state"
-  [state x grammar]
+  [state x firsts grammar]
   (closure
+    firsts
+    grammar
     (reduce
       (fn [acc [lhs rhs pos la]]
         (if (= (nth rhs pos nil) x)
           (conj acc [lhs rhs (inc pos) la])
           acc))
-      #{} state)
-    grammar))
+      #{} state)))
 
-(defn cc [grammar]
-  (let [cc0 (closure (cc0-core grammar) grammar)]
-    (loop [cc #{}
-           to-check [cc0]]
-      (if (empty? to-check)
-        cc
-        (recur
-          (set/union cc to-check)
-          (->>
-            (for [state to-check
-                  [lhs rhs pos la] state]
-              (if (< pos (count rhs))
-                (let [node (nth rhs pos)
-                      next-state (goto state node grammar)]
-                  (when-not (or (= #{nil} next-state)
-                                (contains? cc next-state)
-                                (contains? to-check next-state))
-                    next-state))))
-            (remove nil?)
-            set))))))
+(defn cc [cc0 firsts grammar]
+  (loop [cc #{}
+         to-check [cc0]]
+    (if (empty? to-check)
+      cc
+      (recur
+        (set/union cc to-check)
+        (->>
+          (for [state to-check
+                [lhs rhs pos la] state]
+            (if (< pos (count rhs))
+              (let [node (nth rhs pos)
+                    next-state (goto state node firsts grammar)]
+                (when-not (or (= #{nil} next-state)
+                              (contains? cc next-state)
+                              (contains? to-check next-state))
+                  next-state))))
+          (remove nil?)
+          set)))))
 
 ;;;;;;; LR(1) Table Generation ;;;;;;;
 
 (defn build-tables
   "Builds action and goto tables for the given grammar"
-  [grammar]
-  (let [cc (cc grammar)
+  [cc0 firsts grammar]
+  (let [cc (cc cc0 firsts grammar)
         action-table (atom {})
         goto-table (atom {})]
     (doseq [cc-i cc]
@@ -136,7 +136,7 @@
                     (swap! action-table
                            assoc-in
                            [cc-i nxt]
-                           [:shift (goto cc-i nxt grammar)])))
+                           [:shift (goto cc-i nxt firsts grammar)])))
 
               (and (= pos (count rhs))
                    (not= lhs (:start grammar)))
@@ -153,46 +153,11 @@
                        [cc-i :eof]
                        :accept)))
       (doseq [n (:nonterminals grammar)]
-        (let [cc-j (goto cc-i n grammar)]
+        (let [cc-j (goto cc-i n firsts grammar)]
           (when-not (empty? cc-j)
             (swap! goto-table assoc-in [cc-i n] cc-j)))))
     {:action @action-table
      :goto @goto-table}))
-
-;;;;;;;;;;;;;; Parsing ;;;;;;;;;;;;;;;
-
-(defn make-node [tag children-vec]
-  (println "Identified a" tag)
-  (clojure.pprint/pprint children-vec)
-  (println)
-  {:tag tag :children children-vec})
-
-(defn make-leaf [token]
-  (println "Read a" token)
-  token)
-
-(defn make-parser [grammar on-shift on-reduce]
-  (let [{:keys [action goto]} (build-tables grammar)]
-    (fn [input]
-      (loop [input input
-             stack (list (closure (cc0-core grammar) grammar))]
-        (let [state (first stack)
-              word (first input)
-              table-value (get-in action [state word])]
-          (cond
-            (= table-value :accept)
-              (second stack)
-            (= (first table-value) :reduce)
-              (let [[_ lhs rhs] table-value
-                    [popped remaining] (split-at (* 2 (count rhs)) stack)
-                    next-state (get-in goto [(first remaining) lhs])
-                    node (make-node lhs (reverse (take-nth 2 (rest popped))))]
-                (recur input (into remaining [node next-state])))
-            (= (first table-value) :shift)
-              (let [[_ next-state] table-value]
-                (recur (rest input) (into stack [(make-leaf word) next-state])))
-            :else
-              :failure))))))
 
 ;;;;;; Production Normalization ;;;;;;
 
@@ -230,26 +195,67 @@
         vector? (normalize-vec rhs)
         (normalize-node rhs))))
 
+;;;;;;;;;;;;;;;; Setup ;;;;;;;;;;;;;;;
+
+(defn make-grammar [start ws prods]
+  (let [prods (->> prods
+                (apply hash-map)
+                (util/map-map #(normalize ws %2)))]
+    {:start start
+     :terminals (extract-terminals (vals prods))
+     :nonterminals (set (keys prods))
+     :productions prods}))
+
+(defn- make-parser [cc0 start action goto on-shift on-reduce on-fail]
+  (fn [input]
+    (loop [input input
+           stack (list [cc0 start])]
+      (let [[state tree] (first stack)
+            word (first input)
+            table-value (get-in action [state word])]
+        (case (if (sequential? table-value) (first table-value) table-value)
+          :accept
+            (if (= word :eof)
+              (let [trees (reverse (map second stack))
+                    [[lhs] child-trees] (split-at 1 trees)]
+                  (on-reduce lhs child-trees))
+              (on-fail state word))
+
+          :reduce
+            (let [[_ lhs rhs] table-value
+                  [popped remaining] (split-at (count rhs) stack)
+                  next-state (get-in goto [(ffirst remaining) lhs])
+                  node (on-reduce lhs (reverse (map second popped)))]
+              (recur input (conj remaining [next-state node])))
+
+          :shift
+            (let [[_ next-state] table-value]
+              (recur (rest input) (conj stack [next-state (on-shift word)])))
+
+          (on-fail state word))))))
+
+
 ;;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;
 
-(defn grammar
-  "TODO docstring"
+(defn parser
+  "Creates a parser for the given productions, using the given options."
   [opts & prods]
-  (let [[opts prods] (if (map? opts)
-                       [opts prods]
-                       [{} (cons opts prods)])
-        start (:start opts (first prods))
-        ws (:ws opts #"\s*")
-        prods (apply hash-map prods)
-        prods (util/map-map #(normalize ws %2) prods)
-        ts (extract-terminals (vals prods))
-        nts (set (keys prods))]
-    {:terminals ts
-     :nonterminals nts
-     :start start
-     :productions prods
-     :ws ws
-     :firsts (generate-first-sets ts nts prods)}))
+  (let [[opts prods] (if (map? opts) [opts prods] [{} (cons opts prods)])
+        ; Extract options
+        {:keys [make-node make-leaf on-failure start ws]
+         :or {make-node (fn [lhs child-trees] {:tag lhs :children child-trees})
+              make-leaf identity
+              on-failure (constantly ::failure)
+              start (first prods)
+              ws #"\s*"}} opts
+        ; Normalize the grammar proper        
+        grammar (make-grammar start ws prods)
+        ; Calculate some metadata
+        firsts (generate-first-sets grammar)
+        cc0 (cc0 firsts grammar)
+        ; Build action and goto tables
+        {:keys [action goto]} (build-tables cc0 firsts grammar)]
+    (make-parser cc0 start action goto make-leaf make-node on-failure)))
 
 (defn no-ws [& args]
   (with-meta
@@ -262,8 +268,8 @@
 ;;;;;;;;;;; Sample Usage ;;;;;;;;;;;;;
 
 ; Recognizes simple arithmetic expressions w/ standard OoO
-(def simple-expression-grammar
-  (grammar
+(def simple-expression-parser
+  (parser
     :expr #{[:expr #{"+" "-"} :term]
             :term}
     :term #{[:term #{"*" "/"} :factor]

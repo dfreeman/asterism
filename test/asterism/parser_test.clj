@@ -5,10 +5,20 @@
 
 ; Recognizes strings of the form (^n )^n +
 (def paren-grammar
-  (grammar {:ws nil}
-    :goal :list
-    :list #{[:list :pair] :pair}
-    :pair #{["(" :pair ")"] ["(" ")"]}))
+  (make-grammar :goal nil
+    [:goal :list
+     :list #{[:list :pair] :pair}
+     :pair #{["(" :pair ")"] ["(" ")"]}]))
+
+; Firsts sets
+(def paren-firsts
+  {:goal #{"("}
+   :pair #{"("}
+   :list #{"("}
+   "("   #{"("}
+   ")"   #{")"}
+   ""    #{""}
+   :eof  #{:eof}})
 
 ; CC for the paren-grammar
 (def paren-cc [
@@ -67,36 +77,26 @@
 
 
 (facts "on trivial grammar construction"
-  (let [g (grammar :goal "")]
+  (let [g (make-grammar :goal nil [:goal ""])]
     (:terminals g) => #{""}
     (:nonterminals g) => #{:goal}
     (:start g) => :goal
     (:productions g) => {:goal #{[""]}}))
 
-(facts "on grammar options"
-  (let [prods [:primary :secondary
-               :secondary "word"]
-        g1 (apply grammar prods)
-        g2 (apply grammar {:start :secondary :ws "BLANK"} prods)]
-    (:start g1) => :primary
-    (:start g2) => :secondary
-    (.pattern (:ws g1)) => "\\s*"
-    (:ws g2) => "BLANK"))
-
 (facts "on discovering terminals"
   (let [r345 #"345" ; Patterns use identity
         r9 #"9"     ; to judge equality
-        g (grammar {:ws nil}
-            :a ["1" [[:b "2"]] :b r345]
-            :b #{[#{"6" :a} r9] :a [7 :a 8]})]
+        g (make-grammar :a nil
+            [:a ["1" [[:b "2"]] :b r345]
+             :b #{[#{"6" :a} r9] :a [7 :a 8]}])]
     (:terminals g) => #{"1" "2" r345 "6" 7 8 r9}))
 
 (facts "on normalization"
-  (let [g (grammar {:ws nil}
-            :a [1 2]
-            :b #{1 #{[2 3] [4 5]}}
-            :c [1 #{2 [3 4]}]
-            :d :a)
+  (let [g (make-grammar :a nil
+            [:a [1 2]
+             :b #{1 #{[2 3] [4 5]}}
+             :c [1 #{2 [3 4]}]
+             :d :a])
         p (:productions g)]
     (:a p) => #{[1 2]}
     (:b p) => #{[1] [2 3] [4 5]}
@@ -104,13 +104,13 @@
     (:d p) => #{[:a]}))
 
 (facts "on whitespace injection"
-  (let [g (grammar {:ws "BLANK"}
-            :a [1 2]
-            :b #{[1 2] [3 4]}
-            :c [1 #{2 3}]
-            :d [:a :b :c]
-            :e (no-ws 1 2)
-            :f #{[1 (no-ws 2 3) 4]})
+  (let [g (make-grammar :a "BLANK"
+            [:a [1 2]
+             :b #{[1 2] [3 4]}
+             :c [1 #{2 3}]
+             :d [:a :b :c]
+             :e (no-ws 1 2)
+             :f #{[1 (no-ws 2 3) 4]}])
         p (:productions g)]
     (:a p) => #{[1 "BLANK" 2]}
     (:b p) => #{[1 "BLANK" 2] [3 "BLANK" 4]}
@@ -120,33 +120,15 @@
     (:f p) => #{[1 "BLANK" 2 3 "BLANK" 4]}))
 
 (facts "on computing FIRST(x)"
-  (let [g (grammar {:ws nil}
-            :a #{"a1" ["a2" "a3"] ""}
-            :b #{"b1" [#{"b2" "b3"} "b4"]}
-            :c [:a :b])
-        firsts (generate-first-sets
-                 (:terminals g)
-                 (:nonterminals g)
-                 (:productions g))]
+  (let [g (make-grammar :a nil
+            [:a #{"a1" ["a2" "a3"] ""}
+             :b #{"b1" [#{"b2" "b3"} "b4"]}
+             :c [:a :b]])
+        firsts (generate-first-sets g)]
     (:a firsts) => #{"a1" "a2" ""}
     (:b firsts) => #{"b1" "b2" "b3"}
-    (:c firsts) => #{"a1" "a2" "b1" "b2" "b3"}))
-
-(facts "on generating the core of state 0"
-  (let [g (grammar {:ws nil}
-            :a #{:b [1 2] ["(" :c ")"]}
-            :b "hello!"
-            :c #{[:b :c] ""})
-        g-core (cc0-core g)
-        paren-core (cc0-core paren-grammar)]
-    g-core => #{[:a [:b] 0 :eof]
-                [:a [1 2] 0 :eof]
-                [:a ["(" :c ")"] 0 :eof]}
-    paren-core => #{[:goal [:list] 0 :eof]}))
-
-(facts "on generating the closure of a state set"
-  (let [generated-cc0 (closure (cc0-core paren-grammar) paren-grammar)]
-    generated-cc0 => (paren-cc 0)))
+    (:c firsts) => #{"a1" "a2" "b1" "b2" "b3"}
+    (generate-first-sets paren-grammar) => paren-firsts))
 
 (facts "on determining state transitions in CC"
   (let [nxts   [ :eof  "("   ")" :list :pair ]
@@ -164,17 +146,19 @@
                [  nil  nil   nil   nil   nil ]]] ; 11
     (doseq [[i expected] (into {} (map-indexed vector table))
             [j lookahead] (map vector expected nxts)]
-      (goto (paren-cc i) lookahead paren-grammar)
+      (goto (paren-cc i) lookahead paren-firsts paren-grammar)
         => (exactly (or (get paren-cc j #{}))))))
 
 (facts "on generating the canonical collection for a grammar"
-  (let [generated-cc (cc paren-grammar)]
+  (let [cc0 (cc0 paren-firsts paren-grammar)
+        generated-cc (cc cc0 paren-firsts paren-grammar)]
     (count generated-cc) => 12
     (doseq [cc_i paren-cc]
       generated-cc => (contains (exactly cc_i)))))
 
 (facts "on building action and goto tables"
-  (let [{:keys [action goto]} (build-tables paren-grammar)
+  (let [cc0 (cc0 paren-firsts paren-grammar)
+        {:keys [action goto]} (build-tables cc0 paren-firsts paren-grammar)
         actions {
           0 {"(" [:shift (paren-cc 3)]}
           1 {:eof :accept
@@ -206,5 +190,13 @@
     (doseq [[idx expected] gotos]
       (get goto (paren-cc idx)) => (exactly expected))))
 
+; This will change drastically when scanning actually works
 (facts "on making a parser"
-  "should have tests" =future=> nil)
+  (let [p (parser {:ws nil}
+            :goal :first
+            :first ["a" "b"])]
+    (p ["a"]) => :asterism.parser/failure
+    (p ["a" "b" :eof]) => 
+      {:tag :goal
+       :children [{:tag :first
+                   :children ["a" "b"]}]}))
