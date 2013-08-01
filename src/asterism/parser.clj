@@ -1,24 +1,25 @@
 (ns asterism.parser
   (:require [clojure.set :as set]
-            [asterism.util :as util]))
+            [asterism.util :as util]
+            [asterism.scanner :as scanner]))
 
 ;;;;;;;; Terminal Processing ;;;;;;;;;
 
-(defn- canonical-id [raw-element]
-  (let [type (.toLowerCase (.getSimpleName (type raw-element)))]
-    (keyword (str type "-" raw-element))))
+(defn- canonical-id [literal]
+  (let [type (.toLowerCase (.getSimpleName (type literal)))]
+    (keyword (str type "-" literal))))
 
-(defn- canonical-terminal [[id value]]
-  (if (map? value)
-    (if (:matcher value)
-      (assoc value :id id)
-      (throw (Exception. (str "Invalid terminal definition: " value))))
-    {:id id :matcher value}))
+(defn- canonical-terminal [[id definition]]
+  (if (map? definition)
+    (if (:matcher definition)
+      (assoc definition :id id)
+      (throw (Exception. (str "Invalid terminal definition: " definition))))
+    {:id id :matcher definition}))
 
-(defn- matcher-for [raw-element]
-  (if (util/regex? raw-element)
-    {:pattern (str raw-element)}
-    raw-element))
+(defn- matcher-for [literal]
+  (if (util/regex? literal)
+    {:pattern (str literal)}
+    literal))
 
 (defn- matcher-map [raw-terminals]
   (let [terms (util/set-map canonical-terminal raw-terminals)
@@ -49,20 +50,18 @@
 
 ;;;;;;;;; FIRST(x) Generation ;;;;;;;;
 
-(defn- collapse-first-set
-  "Calculates the additional set of possible first terminals for a
-  possible RHS sequence. For instance, given the production `Factor
-  -> '(' Expr ')' | ident`, one call to calculate-first-set might
-  have `items` as `['(' :expr ')']`"
-  [first-sets rhs-nodes]
-  (loop [rhs-nodes rhs-nodes
+(defn collapse-first
+  "Given a set of known firsts, collapses down the given sequence
+  to determine the valid set of expectable next token types"
+  [firsts sequence]
+  (loop [sequence sequence
          current-set #{}]
-    (let [node (first rhs-nodes)
-          node-firsts (get first-sets node)]
+    (let [node (first sequence)
+          node-firsts (get firsts node)]
       (if (or (not (contains? node-firsts :asterism/empty))
-              (empty? (rest rhs-nodes)))
+              (empty? (rest sequence)))
         (set/union current-set node-firsts)
-        (recur (rest rhs-nodes)
+        (recur (rest sequence)
                (set/union
                  current-set
                  (set/difference node-firsts #{:asterism/empty})))))))
@@ -78,7 +77,7 @@
     (loop [start-value @first-sets]
       (doseq [[lhs rhs-set] productions
               rhs rhs-set]
-        (let [new-set (collapse-first-set @first-sets rhs)]
+        (let [new-set (collapse-first @first-sets rhs)]
           (swap! first-sets update-in [lhs] #(set/union % new-set))))
       (if (= start-value @first-sets)
         start-value
@@ -86,7 +85,7 @@
 
 ;;;;;;;;;;;; CC Generation ;;;;;;;;;;;
 
-(defn- closure
+(defn closure
   "Generates a closed state set from that set's core,
   iteratively including any items implied by those
   already in the set."
@@ -100,7 +99,7 @@
                   prods (get (:productions grammar) nxt)]
               (swap! updated-set set/union
                 (set (for [rhs prods
-                           new-la (collapse-first-set firsts rst)]
+                           new-la (collapse-first firsts rst)]
                        [nxt rhs 0 new-la])))))))
       (if (= items @updated-set)
         items
@@ -228,8 +227,18 @@
 
 ;;;;;;;;;;;;;;;; Setup ;;;;;;;;;;;;;;;
 
+(defn valid-lookaheads [firsts state]
+  (->> state
+    (util/set-map
+      (fn [[_ rhs pos la]]
+        (if (= pos (count rhs))
+          (get firsts la)
+          (get firsts (nth rhs pos)))))
+    util/set-flatten))
+
 (defn make-grammar [start whitespace explicit-terminals prods]
   (let [prods (->> prods
+                (concat [::start start])
                 (apply hash-map)
                 (util/map-map #(normalize whitespace %2)))
         nonterminals (set (keys prods))
@@ -237,38 +246,44 @@
                             nonterminals 
                             explicit-terminals
                             prods)]
-    {:start start
+    {:start ::start
      :terminals terminals
      :nonterminals nonterminals
      :productions prods}))
 
-(defn- make-parser [cc0 start action goto on-shift on-reduce on-fail]
-  (fn [input]
-    (loop [input input
-           stack (list [cc0 start])]
-      (let [[state tree] (first stack)
-            token (first input)
-            table-value (get-in action [state token])]
-        (case (if (sequential? table-value) (first table-value) table-value)
-          :accept
-            (if (= token :asterism/eof)
-              (let [trees (reverse (map second stack))
-                    [[lhs] child-trees] (split-at 1 trees)]
-                  (on-reduce lhs child-trees))
-              (on-fail state token))
+(defn- make-parser [grammar on-shift on-reduce on-fail]
+  (let [firsts (generate-first-sets grammar)
+        cc0 (cc0 firsts grammar)
+        {:keys [action goto]} (build-tables cc0 firsts grammar)]
+    (fn [input]
+      (loop [input [input 0]
+             stack (list [cc0 ::start])]
+        (let [[state tree] (first stack)
+              terminals (:terminals grammar)
+              lookaheads (->> (valid-lookaheads firsts state)
+                              (map (fn [id] [id (get terminals id)]))
+                              (into {}))
+              [input' token] (scanner/scan input lookaheads state)
+              token-type (:type token)
+              table-value (get-in action [state token-type])]
+          (case (if (sequential? table-value) (first table-value) table-value)
+            :accept
+              (if (= token-type :asterism/eof)
+                (second (first stack))
+                (on-fail state token))
 
-          :reduce
-            (let [[_ lhs rhs] table-value
-                  [popped remaining] (split-at (count rhs) stack)
-                  next-state (get-in goto [(ffirst remaining) lhs])
-                  node (on-reduce lhs (reverse (map second popped)))]
-              (recur input (conj remaining [next-state node])))
+            :reduce
+              (let [[_ lhs rhs] table-value
+                    [popped remaining] (split-at (count rhs) stack)
+                    next-state (get-in goto [(ffirst remaining) lhs])
+                    node (on-reduce lhs (reverse (map second popped)))]
+                (recur input (conj remaining [next-state node])))
 
-          :shift
-            (let [[_ next-state] table-value]
-              (recur (rest input) (conj stack [next-state (on-shift token)])))
+            :shift
+              (let [[_ next-state] table-value]
+                (recur input' (conj stack [next-state (on-shift token)])))
 
-          (on-fail state token))))))
+            (on-fail state token)))))))
 
 ;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;;
 
@@ -276,22 +291,15 @@
   "Creates a parser for the given productions, using the given options."
   [opts & prods]
   (let [[opts prods] (if (map? opts) [opts prods] [{} (cons opts prods)])
-        ; Extract options
         {:keys [make-node make-leaf on-failure start whitespace terminals]
-         :or {make-node (fn [lhs child-trees] {:tag lhs :children child-trees})
+         :or {make-node (fn [lhs child-trees] {:type lhs :children child-trees})
               make-leaf identity
               on-failure (constantly ::failure)
               start (first prods)
               whitespace #"\s*"
               terminals {}}} opts
-        ; Normalize the grammar proper        
-        grammar (make-grammar start whitespace terminals prods)
-        ; Calculate the set of firsts and 0th CC set
-        firsts (generate-first-sets grammar)
-        cc0 (cc0 firsts grammar)
-        ; Build action and goto tables
-        {:keys [action goto]} (build-tables cc0 firsts grammar)]
-    (make-parser cc0 start action goto make-leaf make-node on-failure)))
+        grammar (make-grammar start whitespace terminals prods)]
+    (make-parser grammar make-leaf make-node on-failure)))
 
 (defn no-ws [& args]
   (with-meta
@@ -303,14 +311,13 @@
 
 ;;;;;;;;;;; Sample Usage ;;;;;;;;;;;;;
 
-
 ; Recognizes simple arithmetic expressions w/ standard OoO
 (def simple-expression-parser
-  (parser
+  (parser {:whitespace nil}
     :expr #{[:expr #{"+" "-"} :term]
             :term}
     :term #{[:term #{"*" "/"} :factor]
             :factor}
     :factor #{["(" :expr ")"]
               #"\d+"
-              #"\w+"}))
+              #"[a-zA-Z]\w*"}))

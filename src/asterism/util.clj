@@ -8,11 +8,23 @@
         (conj acc item)))
     init coll))
 
+(defn- omni-filter [target pred? coll]
+  (into target (filter pred? coll)))
+
 (defn set-flatten [coll]
   (omni-flatten #{} set? coll))
 
 (defn vec-flatten [coll]
   (omni-flatten [] vector? coll))
+
+(defn set-filter [pred? coll]
+  (omni-filter #{} pred? coll))
+
+(defn vec-filter [pred? coll]
+  (omni-filter [] pred? coll))
+
+(defn map-filter [pred? coll]
+  (omni-filter {} (fn [[k v]] (pred? k v)) coll))
 
 (defn set-map [fun coll]
   (into #{} (map fun coll)))
@@ -34,3 +46,15 @@
 
 (defn regex? [x]
   (instance? java.util.regex.Pattern x))
+
+
+(defn print-tree
+  ([tree] (print-tree tree ""))
+  ([tree indent]
+    (print (str indent (:type tree)))
+    (if-let [lexeme (:lexeme tree)]
+      (println (str " \"" lexeme "\""))
+      (let [children (:children tree)]
+        (println)
+        (doseq [child children]
+          (print-tree child (str indent "|   ")))))))

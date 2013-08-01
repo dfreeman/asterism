@@ -1,20 +1,19 @@
 (ns asterism.parser-test
-  (:require [midje.sweet :refer [facts contains exactly]]
+  (:require [midje.sweet :refer [facts contains exactly throws]]
             [asterism.parser :refer :all]
             [clojure.pprint :refer [pprint]]))
 
 ; Recognizes strings of the form (^n )^n +
 (def paren-grammar
-  (make-grammar :goal nil
+  (make-grammar :list nil
     {:lparen "("
      :rparen ")"}
-    [:goal :list
-     :list #{[:list :pair] :pair}
+    [:list #{[:list :pair] :pair}
      :pair #{[:lparen :pair :rparen] [:lparen :rparen]}]))
 
 ; Firsts sets
 (def paren-firsts
-  {:goal #{:lparen}
+  {:asterism.parser/start #{:lparen}
    :pair #{:lparen}
    :list #{:lparen}
    :lparen #{:lparen}
@@ -25,7 +24,7 @@
 ; CC for the paren-grammar
 (def paren-cc [
   ; cc0
-  #{[:goal [:list] 0 :asterism/eof]
+  #{[:asterism.parser/start [:list] 0 :asterism/eof]
     [:list [:list :pair] 0 :lparen]
     [:list [:list :pair] 0 :asterism/eof]
     [:list [:pair] 0 :lparen]
@@ -35,7 +34,7 @@
     [:pair [:lparen :rparen] 0 :lparen]
     [:pair [:lparen :rparen] 0 :asterism/eof]}
   ; cc1
-  #{[:goal [:list] 1 :asterism/eof]
+  #{[:asterism.parser/start [:list] 1 :asterism/eof]
     [:list [:list :pair] 1 :asterism/eof]
     [:list [:list :pair] 1 :lparen]
     [:pair [:lparen :pair :rparen] 0 :asterism/eof]
@@ -82,9 +81,10 @@
   (let [g (make-grammar :goal nil {} [:goal "abc"])]
     (:terminals g) => {:string-abc {:matcher "abc"}
                        :asterism/empty {:matcher ""}}
-    (:nonterminals g) => #{:goal}
-    (:start g) => :goal
-    (:productions g) => {:goal #{[:string-abc]}}))
+    (:nonterminals g) => #{:asterism.parser/start :goal}
+    (:start g) => :asterism.parser/start
+    (:productions g) => {:asterism.parser/start #{[:goal]}
+                         :goal #{[:string-abc]}}))
 
 (facts "on discovering terminals"
   (let [r345 #"345" ; Patterns use identity
@@ -207,8 +207,16 @@
   (let [p (parser {:whitespace nil}
             :goal :first
             :first ["a" "b"])]
-    (p [:string-a]) => :asterism.parser/failure
-    (p [:string-a :string-b :asterism/eof]) => 
-      {:tag :goal
-       :children [{:tag :first
-                   :children [:string-a :string-b]}]}))
+    (p "xxx") => (throws Exception "not enough!")
+    (p "ab") => 
+      {:type :goal
+       :children [{:type :first
+                   :children 
+                    [{:type :string-a
+                      :lexeme "a"
+                      :meta {:start 0
+                             :length 1}}
+                     {:type :string-b
+                      :lexeme "b"
+                      :meta {:start 1
+                             :length 1}}]}]}))
