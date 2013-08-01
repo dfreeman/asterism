@@ -170,7 +170,7 @@
 
 (facts "on building action and goto tables"
   (let [cc0 (cc0 paren-firsts paren-grammar)
-        {:keys [action goto]} (build-tables cc0 paren-firsts paren-grammar)
+        {:keys [action-table goto-table]} (build-tables cc0 paren-firsts paren-grammar)
         actions {
           0 {:lparen [:shift (paren-cc 3)]}
           1 {:asterism/eof :accept
@@ -198,25 +198,20 @@
           3 {:pair (paren-cc 5)}
           6 {:pair (paren-cc 9)}}]
     (doseq [[idx expected] actions]
-      (get action (paren-cc idx)) => (exactly expected))
+      (get action-table (paren-cc idx)) => (exactly expected))
     (doseq [[idx expected] gotos]
-      (get goto (paren-cc idx)) => (exactly expected))))
+      (get goto-table (paren-cc idx)) => (exactly expected))))
 
-; This will change drastically when scanning actually works
 (facts "on making a parser"
   (let [p (parser {:whitespace nil}
             :goal :first
             :first ["a" "b"])]
-    (p "xxx") => (throws Exception "not enough!")
+    (p "xxx") => :asterism.parser/failure
     (p "ab") => 
       {:type :goal
        :children [{:type :first
                    :children 
                     [{:type :string-a
-                      :lexeme "a"
-                      :meta {:start 0
-                             :length 1}}
+                      :lexeme "a"}
                      {:type :string-b
-                      :lexeme "b"
-                      :meta {:start 1
-                             :length 1}}]}]}))
+                      :lexeme "b"}]}]}))

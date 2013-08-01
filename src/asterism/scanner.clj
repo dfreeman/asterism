@@ -1,7 +1,8 @@
 (ns asterism.scanner
-  (:require [asterism.util :as util]))
+  (:require [asterism.util :as util]
+            [clojure.set :as set]))
 
-;;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;
+;;;;;;;;;;;;;; Matching ;;;;;;;;;;;;;;
 
 (defprotocol Matchable
   (matches? [this input offset]
@@ -38,25 +39,97 @@
   (matches? [this input offset]
     (this input offset)))
 
-(defn- make-token [id terminal offset match]
+;;;;;;;;; Token Construction ;;;;;;;;;
+
+(defn make-token [id terminal offset match]
   (let [{:keys [lexeme consumed]} match
         metadata (dissoc match :lexeme :consumed)]
-    {:type id
-     :lexeme lexeme
-     :meta (assoc metadata
-                 :start offset
-                 :length consumed)}))
+    (with-meta
+      {:type id
+       :lexeme lexeme}
+      (assoc metadata
+        :terminal terminal
+        :start offset
+        :length consumed))))
 
-(defn scan [[input offset] valid-lookahead state]
+;;;;;;;;; Terminal Dominance ;;;;;;;;;
+
+(defn dominates? [terms a-id b-id]
+  (let [a-term (get terms a-id)
+        b-term (get terms b-id)
+        a-classes (into #{a-id} (:classes a-term))
+        b-classes (into #{b-id} (:classes b-term))
+        a-dominates (set (:dominates a-term))
+        b-submits-to (set (:submits-to b-term))]
+    (or (not (empty? (set/intersection a-classes b-submits-to)))
+        (not (empty? (set/intersection b-classes a-dominates))))))
+
+(defn- full-dominance-set [dom-map ids]
+  (apply set/union
+    ids
+    (map #(get dom-map %) ids)))
+
+(defn- dominance-map
+  "Produces a map from terminal ids to the set of terminal
+  ids by which that those terminals are directly or indirectly
+  dominated"
+  [terminals]
+  (let [term-ids (keys terminals)
+        ; Map each id to the set of ids that directly dominate it
+        initial-doms 
+          (->> term-ids
+            (util/set-map 
+              (fn [id]
+                (->> term-ids
+                  (util/set-filter #(dominates? terminals % id))
+                  (vector id))))
+            (into {}))]
+    ; Keep rolling in indirect dominators until reaching a fixed point
+    (util/fixed-point
+      initial-doms
+      (fn [doms]
+        (util/map-map
+          (fn [id dominators] (full-dominance-set doms dominators))
+          doms)))))
+
+;;;;;;;;; Processing Helpers ;;;;;;;;;
+
+(defn- find-maximal [tokens]
+  (let [consumed-groups (group-by #(:length (meta %)) tokens)
+        [length group] (last (sort consumed-groups))]
+    group))
+
+;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;;
+
+(defn scanner [input terminals]
+  {:input input
+   :terminals terminals
+   :dominance-map (dominance-map terminals)})
+
+(defn scan [{:keys [input terminals dominance-map]} offset valid-lookahead]
   (if (>= offset (count input))
-    [[input offset] {:type :asterism/eof}]
-    (let [matches (for [[id terminal] valid-lookahead]
-                    (when-let [match (matches? (:matcher terminal) input offset)]
-                      (make-token id terminal offset match)))
-          matches (filter identity matches)]
-      (case (count matches)
-        0 (throw (Exception. "not enough!"))
-        1 (let [match (first matches)
-                length (get-in match [:meta :length])]
-            [[input (+ offset length)] match])
-        (throw (Exception. "too many!"))))))
+    ; If all input is consumed, EOF
+    #{[offset {:type :asterism/eof}]}
+    ; Otherwise, expand the search to include any dominating terminals...
+    (let [valid-lookahead (full-dominance-set dominance-map valid-lookahead)
+          matched-tokens
+            (->> (for [id valid-lookahead]
+                   ; attempt to match each one...
+                   (let [terminal (get terminals id)
+                         matcher (:matcher terminal)]
+                     (when-let [match (matches? matcher input offset)]
+                       (make-token id terminal offset match))))
+                 (filter identity)
+                 ; but only keep the ones that consumed the most.
+                 find-maximal)
+          matched-types (util/set-map :type matched-tokens)]
+      (->> matched-tokens
+        ; Filter out any tokens that were dominated by other matches
+        (filter
+          (fn [token]
+            (let [dominators (get dominance-map (:type token))]
+              (not-any? dominators matched-types))))
+        ; Tag each with the new offset and return
+        (util/set-map 
+          (fn [token]
+            [(+ offset (:length (meta token))) token]))))))

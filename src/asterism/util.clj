@@ -47,6 +47,10 @@
 (defn regex? [x]
   (instance? java.util.regex.Pattern x))
 
+(defn fixed-point [arg fun]
+  (loop [arg arg]
+    (let [arg' (fun arg)]
+      (if (= arg arg') arg (recur arg')))))
 
 (defn print-tree
   ([tree] (print-tree tree ""))

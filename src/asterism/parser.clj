@@ -74,14 +74,14 @@
                               :asterism/eof #{:asterism/eof}}
                              (into (map #(vector % #{%}) (keys terminals)))
                              (into (map #(vector % #{}) nonterminals))))]
-    (loop [start-value @first-sets]
-      (doseq [[lhs rhs-set] productions
-              rhs rhs-set]
-        (let [new-set (collapse-first @first-sets rhs)]
-          (swap! first-sets update-in [lhs] #(set/union % new-set))))
-      (if (= start-value @first-sets)
-        start-value
-        (recur @first-sets)))))
+    (util/fixed-point
+      @first-sets
+      (fn [start-value]
+        (doseq [[lhs rhs-set] productions
+                rhs rhs-set]
+          (let [new-set (collapse-first @first-sets rhs)]
+            (swap! first-sets update-in [lhs] #(set/union % new-set))))
+        @first-sets))))
 
 ;;;;;;;;;;;; CC Generation ;;;;;;;;;;;
 
@@ -186,8 +186,8 @@
         (let [cc-j (goto cc-i n firsts grammar)]
           (when-not (empty? cc-j)
             (swap! goto-table assoc-in [cc-i n] cc-j)))))
-    {:action @action-table
-     :goto @goto-table}))
+    {:action-table @action-table
+     :goto-table @goto-table}))
 
 ;;;;;; Production Normalization ;;;;;;
 
@@ -254,36 +254,44 @@
 (defn- make-parser [grammar on-shift on-reduce on-fail]
   (let [firsts (generate-first-sets grammar)
         cc0 (cc0 firsts grammar)
-        {:keys [action goto]} (build-tables cc0 firsts grammar)]
+        {:keys [action-table goto-table]} (build-tables cc0 firsts grammar)]
     (fn [input]
-      (loop [input [input 0]
-             stack (list [cc0 ::start])]
-        (let [[state tree] (first stack)
-              terminals (:terminals grammar)
-              lookaheads (->> (valid-lookaheads firsts state)
-                              (map (fn [id] [id (get terminals id)]))
-                              (into {}))
-              [input' token] (scanner/scan input lookaheads state)
-              token-type (:type token)
-              table-value (get-in action [state token-type])]
-          (case (if (sequential? table-value) (first table-value) table-value)
-            :accept
-              (if (= token-type :asterism/eof)
-                (second (first stack))
-                (on-fail state token))
+      (let [terminals (:terminals grammar)
+            scanner (scanner/scanner input terminals)]
+        (loop [pos 0
+               stack (list [cc0 ::start])]
+          (let [[state tree] (first stack)
+                lookaheads (valid-lookaheads firsts state)
+                possible-tokens (scanner/scan scanner pos lookaheads)]
+            (case (count possible-tokens)
+              0 (on-fail "Scanner returned no tokens" state [])
+              1 (let [[pos' token] (first possible-tokens)
+                      token-type (:type token)
+                      table-value (get-in action-table [state token-type])
+                      action (if (sequential? table-value)
+                               (first table-value)
+                               table-value)]
+                  (case action
+                    :accept
+                      (if (= token-type :asterism/eof)
+                        (second (first stack))
+                        (on-fail state token))
 
-            :reduce
-              (let [[_ lhs rhs] table-value
-                    [popped remaining] (split-at (count rhs) stack)
-                    next-state (get-in goto [(ffirst remaining) lhs])
-                    node (on-reduce lhs (reverse (map second popped)))]
-                (recur input (conj remaining [next-state node])))
+                    :reduce
+                      (let [[_ lhs rhs] table-value
+                            [popped remaining] (split-at (count rhs) stack)
+                            state' (get-in goto-table [(ffirst remaining) lhs])
+                            node (on-reduce lhs (reverse (map second popped)))]
+                        (recur pos (conj remaining [state' node])))
 
-            :shift
-              (let [[_ next-state] table-value]
-                (recur input' (conj stack [next-state (on-shift token)])))
+                    :shift
+                      (let [[_ next-state] table-value]
+                        (recur pos' (conj stack [next-state (on-shift token)])))
 
-            (on-fail state token)))))))
+                    (on-fail "No table entry" state [token])))
+
+              (->> (map second possible-tokens)
+                   (on-fail "Ambiguous state" state)))))))))
 
 ;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;;
 
@@ -293,8 +301,8 @@
   (let [[opts prods] (if (map? opts) [opts prods] [{} (cons opts prods)])
         {:keys [make-node make-leaf on-failure start whitespace terminals]
          :or {make-node (fn [lhs child-trees] {:type lhs :children child-trees})
-              make-leaf identity
-              on-failure (constantly ::failure)
+              make-leaf (fn [token] token)
+              on-failure (fn [msg state tokens] ::failure)
               start (first prods)
               whitespace #"\s*"
               terminals {}}} opts
