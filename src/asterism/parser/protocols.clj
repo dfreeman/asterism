@@ -2,14 +2,10 @@
   (:refer-clojure :exclude [type]))
 
 (defprotocol IMatcher
-  (matches? [this input offset]
+  (matches? [this input offset type source-info]
     "Tests whether this object matches the given input starting at the given
-    offset. If it does not match, returns nil. If it does, returns a map 
-    containing at least the following keys:
-      :consumed - the number of characters consumed from the input
-      :lexeme - the value for the token to be produced
-    Additional keys may be defined by some implementations. For instance, any 
-    internal groups in a Pattern will have their matches in a :groups vector."))
+    offset. If it does not match, returns nil. If it does, returns a vector
+    containing the number of characters consumed and an IToken instance."))
 
 (defprotocol INonterminal
   (collapse? [this] 

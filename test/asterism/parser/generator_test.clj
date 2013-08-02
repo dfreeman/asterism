@@ -1,6 +1,6 @@
 (ns asterism.parser.generator-test
   (:require [midje.sweet :refer [facts contains exactly throws]]
-            [asterism.parser.mocks]
+            [asterism.parser.protocols :as parser]
             [asterism.parser.generator :refer :all]))
 
 ; Recognizes strings of the form (^n )^n +
@@ -91,44 +91,47 @@
         r9 #"9"     ; to judge equality
         g (make-grammar :a nil {}
             [:a ["1" [[:b "2"]] :b r345]
-             :b #{[#{"6" :a} r9] :a [7 :a 8]}])]
+             :b #{[#{"6" :a} r9] :a ["7" :a "8"]}])]
     (:terminals g) => 
       {:string-1 (make-terminal [:string-1 "1"])
        :string-2 (make-terminal [:string-2 "2"])
        :pattern-345 (make-terminal [:pattern-345 r345])
        :string-6 (make-terminal [:string-6 "6"])
-       :long-7 (make-terminal [:long-7 7])
-       :long-8 (make-terminal [:long-8 8])
+       :string-7 (make-terminal [:string-7 "7"])
+       :string-8 (make-terminal [:string-8 "8"])
        :pattern-9 (make-terminal [:pattern-9 r9])
        :asterism/empty (make-terminal [:asterism/empty ""])}))
 
 (facts "on normalization"
   (let [g (make-grammar :a nil {}
-            [:a [1 2]
-             :b #{1 #{[2 3] [4 5]}}
-             :c [1 #{2 [3 4]}]
+            [:a ["1" "2"]
+             :b #{"1" #{["2" "3"] ["4" "5"]}}
+             :c ["1" #{"2" ["3" "4"]}]
              :d :a])
         p (:productions g)]
-    (:a p) => #{[:long-1 :long-2]}
-    (:b p) => #{[:long-1] [:long-2 :long-3] [:long-4 :long-5]}
-    (:c p) => #{[:long-1 :long-2] [:long-1 :long-3 :long-4]}
+    (:a p) => #{[:string-1 :string-2]}
+    (:b p) => #{[:string-1] [:string-2 :string-3] [:string-4 :string-5]}
+    (:c p) => #{[:string-1 :string-2] [:string-1 :string-3 :string-4]}
     (:d p) => #{[:a]}))
 
 (facts "on whitespace injection"
   (let [g (make-grammar :a "BLANK" {}
-            [:a [1 2]
-             :b #{[1 2] [3 4]}
-             :c [1 #{2 3}]
+            [:a ["1" "2"]
+             :b #{["1" "2"] ["3" "4"]}
+             :c ["1" #{"2" "3"}]
              :d [:a :b :c]
-             :e (no-ws 1 2)
-             :f #{[1 (no-ws 2 3) 4]}])
+             :e (no-ws "1" "2")
+             :f #{["1" (no-ws "2" "3") "4"]}])
         p (:productions g)]
-    (:a p) => #{[:long-1 :string-BLANK :long-2]}
-    (:b p) => #{[:long-1 :string-BLANK :long-2] [:long-3 :string-BLANK :long-4]}
-    (:c p) => #{[:long-1 :string-BLANK :long-2] [:long-1 :string-BLANK :long-3]}
+    (:a p) => #{[:string-1 :string-BLANK :string-2]}
+    (:b p) => #{[:string-1 :string-BLANK :string-2]
+                [:string-3 :string-BLANK :string-4]}
+    (:c p) => #{[:string-1 :string-BLANK :string-2]
+                [:string-1 :string-BLANK :string-3]}
     (:d p) => #{[:a :string-BLANK :b :string-BLANK :c]}
-    (:e p) => #{[:long-1 :long-2]}
-    (:f p) => #{[:long-1 :string-BLANK :long-2 :long-3 :string-BLANK :long-4]}))
+    (:e p) => #{[:string-1 :string-2]}
+    (:f p) => #{[:string-1 :string-BLANK :string-2 
+                 :string-3 :string-BLANK :string-4]}))
 
 (facts "on computing FIRST(x)"
   (let [g (make-grammar :a nil {}
@@ -203,14 +206,14 @@
     (doseq [[idx expected] gotos]
       (get goto-table (paren-cc idx)) => (exactly expected))))
 
-(facts "on collapsing nonterminals"
-  (let [p (parser {:whitespace :space
-                   :terminals {:space " "
+(facts "on collapsing nonterminals and eliding terminals"
+  (let [p (parser {:whitespace nil
+                   :terminals {:<space> " "
                                :ident #"[a-zA-Z]\w*"}}
             :list :<list>
-            :<list> #{[:<list> :item] :item}
-            :item :ident)
+            :<list> #{[:<list> :<space> :<item>] :<item>}
+            :<item> :ident)
         tree (p "a bc d")]
     (:type tree) => :list
-    (map :type (:children tree)) =>
-      [:item :space :item :space :item]))
+    (map parser/lexeme (:children tree)) =>
+      ["a" "bc" "d"]))

@@ -3,49 +3,44 @@
             [asterism.util :as util]
             [clojure.set :as set]))
 
-;;;;;;;;;;;;;;; Models ;;;;;;;;;;;;;;;
-
-(defrecord Token [type lexeme source-info]
-  parser/IToken
-  (token-type [this] type)
-  (lexeme [this] lexeme)
-  (source-info [this] source-info))
-
 ;;;;;;;;;;;;;; Matching ;;;;;;;;;;;;;;
+
+(defn- make-token [type lexeme source-info & {:as supplements}]
+    {:token-type type
+     :lexeme lexeme
+     :source-info (into source-info supplements)})
+
+(extend-protocol parser/IToken
+  clojure.lang.IPersistentMap
+  (token-type [this] (:token-type this))
+  (lexeme [this] (:lexeme this))
+  (source-info [this] (:source-info this)))
 
 (extend-protocol parser/IMatcher
   nil
-  (matches? [this _ _] nil)
+  (matches? [this _ _ _] nil)
 
   java.lang.String
-  (matches? [this input offset]
+  (matches? [this input offset type source-info]
     (when (.regionMatches this 0 input offset (.length this))
-      {:consumed (.length this)
-       :lexeme this}))
+      [(.length this) (make-token type this source-info
+                        :length (.length this))]))
 
   java.util.regex.Pattern
-  (matches? [this input offset]
+  (matches? [this input offset type source-info]
     (let [matcher (.matcher this input)]
       (.region matcher offset (.length input))
       (when (.lookingAt matcher)
-        {:consumed (- (.end matcher) offset)
-         :lexeme (.group matcher)
-         :groups (util/vec-for [i (range 1 (inc (.groupCount matcher)))]
-                   (.group matcher i))})))
+        (let [consumed (- (.end matcher) offset)
+              groups (inc (.groupCount matcher))]
+          [consumed (make-token type (.group matcher) source-info
+                      :length consumed
+                      :groups (util/vec-for [i (range 1 groups)]
+                                (.group matcher i)))]))))
 
   clojure.lang.IFn
-  (matches? [this input offset]
-    (this input offset)))
-
-;;;;;;;;; Token Construction ;;;;;;;;;
-
-(defn make-token [type offset match]
-  (let [{:keys [lexeme consumed]} match
-        source-info (dissoc match :lexeme :consumed)]
-    (->Token type lexeme
-      (assoc source-info
-        :start offset
-        :length consumed))))
+  (matches? [this input offset type source-info]
+    (this input offset type source-info)))
 
 ;;;;;;;;; Terminal Dominance ;;;;;;;;;
 
@@ -94,6 +89,18 @@
         [length group] (last (sort consumed-groups))]
     group))
 
+(defn- find-matches [terminals input offset valid-lookahead]
+  (->> 
+    (for [id valid-lookahead]
+      (when-let [terminal (get terminals id)]
+        (let [matcher (parser/matcher terminal)
+              source-info {:start offset}]
+          (when-let [[consumed token]
+                       (parser/matches? matcher input offset id source-info)]
+            (when (or (not= consumed 0) (= id :asterism/empty))
+              token)))))
+    (filter identity)))
+
 ;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;;
 
 (defn scanner [input terminals]
@@ -108,15 +115,9 @@
     ; Otherwise, expand the search to include any dominating terminals...
     (let [valid-lookahead (full-dominance-set dominance-map valid-lookahead)
           matched-tokens
-            (->> (for [id valid-lookahead]
-                   ; attempt to match each one...
-                   (when-let [terminal (get terminals id)]
-                     (let [matcher (parser/matcher terminal)]
-                       (when-let [match (parser/matches? matcher input offset)]
-                         (when [(and (= (:consumed match) 0)
-                                     (not= id :asterism/empty))]
-                           (make-token id offset match))))))
-                 (filter identity)
+            (->> valid-lookahead
+                 ; attempt to match each one... 
+                 (find-matches terminals input offset)
                  ; but only keep the ones that consumed the most.
                  find-maximal)
           matched-types (util/set-map parser/token-type matched-tokens)]

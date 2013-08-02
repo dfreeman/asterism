@@ -14,25 +14,30 @@
       (and (.startsWith n "<")
            (.endsWith n ">")))))
 
-(defrecord Terminal [id matcher opts]
-  parser/ITerminal
-  (id [this] id)
-  (matcher [this] matcher)
-  (elide? [this] (let [n (name id)]
+(extend-protocol parser/ITerminal
+  clojure.lang.IPersistentMap
+  (id [this] (:id this))
+  (matcher [this] (:matcher this))
+  (elide? [this] (let [n (name (parser/id this))]
                    (and (.startsWith n "<")
                         (.endsWith n ">"))))
-  (classes [this] (into #{id} (:classes opts)))
-  (dominates [this] (:dominates opts #{}))
-  (submits-to [this] (:submits-to opts #{})))
+  (classes [this] (into #{(parser/id this)} (:classes this)))
+  (dominates [this] (:dominates this #{}))
+  (submits-to [this] (:submits-to this #{})))
 
 ;;;;;;;; Terminal Processing ;;;;;;;;;
 
 (defn make-terminal [[id definition]]
-  (if (map? definition)
-    (if-let [matcher (:matcher definition)]
-      (->Terminal id matcher (dissoc definition :matcher))
-      (throw (Exception. (str "Invalid terminal definition: " definition))))
-    (->Terminal id definition {})))
+  (cond 
+    (and (map? definition)
+         (satisfies? parser/IMatcher (:matcher definition)))
+      (assoc definition :id id)
+    (satisfies? parser/ITerminal definition)
+      definition
+    (satisfies? parser/IMatcher definition)
+      {:id id :matcher definition}
+    :else
+      (throw+ {:type ::invalid-terminal :id id :definition definition})))
 
 (defn- generate-id [matcher]
   (let [type (.toLowerCase (.getSimpleName (type matcher)))]
@@ -52,7 +57,12 @@
     (merge by-id by-matcher)))
 
 (defn- process-terminals [nonterminals explicits prods]
-  (let [initial (into explicits {:asterism/empty ""})
+  (let [explicits (if (map? explicits) 
+                    explicits
+                    (util/map-for [term explicits]
+                      (parser/id term)
+                      term))
+        initial (into explicits {:asterism/empty ""})
         terminals (atom (terminal-lookup initial))
         prods (util/map-for [[lhs prod] prods] lhs
                 (util/set-for [alternative prod]
@@ -120,14 +130,16 @@
       (let [cc' (into cc to-check)
             to-check' 
               (apply set/union
-                (for [[lhs rhs pos la] to-check]
-                  (when-let [nxt (nth rhs pos nil)]
-                    (if (contains? nonterminals nxt)
-                      (let [rst (concat (drop (inc pos) rhs) [la])
-                            prods (get productions nxt)]
-                        (util/set-for [rhs prods
-                                       new-la (collapse-first firsts rst)]
-                          [nxt rhs 0 new-la]))))))]
+                (pmap 
+                  (fn [[lhs rhs pos la]]
+                    (when-let [nxt (nth rhs pos nil)]
+                      (if (contains? nonterminals nxt)
+                        (let [rst (concat (drop (inc pos) rhs) [la])
+                              prods (get productions nxt)]
+                          (util/set-for [rhs prods
+                                         new-la (collapse-first firsts rst)]
+                            [nxt rhs 0 new-la])))))
+                  to-check))]
         (if (empty? (set/difference to-check' cc'))
           cc'
           (recur cc' to-check'))))))
@@ -365,7 +377,7 @@
               on-failure (fn [failure-type state] [::failure failure-type state])
               start (first prods)
               whitespace #{#"\s+" :asterism/empty}
-              terminals {}}} opts
+              terminals #{}}} opts
         grammar (make-grammar start whitespace terminals prods)]
     (make-parser grammar make-leaf make-node on-failure)))
 
