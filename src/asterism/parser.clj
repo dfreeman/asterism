@@ -18,7 +18,9 @@
   ast/ITerminal
   (id [this] id)
   (matcher [this] matcher)
-  (elide? [this] (:elide opts false))
+  (elide? [this] (let [n (name id)]
+                   (and (.startsWith n "<")
+                        (.endsWith n ">"))))
   (classes [this] (into #{id} (:classes opts)))
   (dominates [this] (:dominates opts #{}))
   (submits-to [this] (:submits-to opts #{})))
@@ -282,13 +284,23 @@
      :nonterminals nonterminals
      :productions prods}))
 
+(defn- elide-children [terminals children]
+  (->> children
+    (map
+      (fn [child]
+        (if-not (satisfies? ast/ITerminal child)
+          child
+          (let [type (ast/type child)
+                term (get terminals type)]
+            (if (and term (ast/elide? term))
+              nil
+              child)))))
+    (filter identity)))
+
 (defn- make-parser [grammar on-shift on-reduce on-fail]
   (let [firsts (generate-first-sets grammar)
         cc0 (cc0 firsts grammar)
         {:keys [action-table goto-table]} (build-tables cc0 firsts grammar)]
-    ; (println "ACTIONS")
-    ; (clojure.pprint/pprint action-table)
-    ; (println)
     (fn [input]
       (let [terminals (:terminals grammar)
             scanner (scanner/scanner input terminals)]
@@ -319,7 +331,11 @@
                       (let [[_ lhs rhs] table-value
                             [popped remaining] (split-at (count rhs) stack)
                             state' (get-in goto-table [(ffirst remaining) lhs])
-                            children (flatten (reverse (map second popped)))
+                            children (->> popped
+                                          (map second)
+                                          reverse
+                                          flatten
+                                          (elide-children terminals))
                             node (if (ast/collapse? lhs)
                                    children
                                    (on-reduce lhs children))]
