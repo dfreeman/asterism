@@ -1,50 +1,72 @@
 (ns asterism.parser
   (:require [clojure.set :as set]
+            [asterism :as ast]
             [asterism.util :as util]
-            [asterism.scanner :as scanner]))
+            [asterism.scanner :as scanner]
+            [slingshot.slingshot :refer [throw+]]))
+
+;;;;;;;;;;;;;;; Models ;;;;;;;;;;;;;;;
+
+(extend-protocol ast/INonterminal
+  clojure.lang.Keyword
+  (collapse? [this]
+    (let [n (name this)]
+      (and (.startsWith n "<")
+           (.endsWith n ">")))))
+
+(defrecord Terminal [id matcher opts]
+  ast/ITerminal
+  (id [this] id)
+  (matcher [this] matcher)
+  (elide? [this] (:elide opts false))
+  (classes [this] (into #{id} (:classes opts)))
+  (dominates [this] (:dominates opts #{}))
+  (submits-to [this] (:submits-to opts #{})))
 
 ;;;;;;;; Terminal Processing ;;;;;;;;;
 
-(defn- canonical-id [literal]
-  (let [type (.toLowerCase (.getSimpleName (type literal)))]
-    (keyword (str type "-" literal))))
-
-(defn- canonical-terminal [[id definition]]
+(defn make-terminal [[id definition]]
   (if (map? definition)
-    (if (:matcher definition)
-      (assoc definition :id id)
+    (if-let [matcher (:matcher definition)]
+      (->Terminal id matcher (dissoc definition :matcher))
       (throw (Exception. (str "Invalid terminal definition: " definition))))
-    {:id id :matcher definition}))
+    (->Terminal id definition {})))
 
-(defn- matcher-for [literal]
+(defn- generate-id [matcher]
+  (let [type (.toLowerCase (.getSimpleName (type matcher)))]
+    (keyword (str type "-" matcher))))
+
+(defn- matcher-key [literal]
   (if (util/regex? literal)
     {:pattern (str literal)}
     literal))
 
-(defn- matcher-map [raw-terminals]
-  (let [terms (util/set-map canonical-terminal raw-terminals)
-        by-id (into {} (map #(vector (:id %) %) terms))
-        by-matcher (into {} (map #(vector (matcher-for (:matcher %)) %) terms))]
+(defn- terminal-lookup [raw-terminals]
+  (let [terms (util/set-map make-terminal raw-terminals)
+        by-id (into {} (map #(vector (ast/id %) %) terms))
+        by-matcher (->> terms
+                     (map #(vector (matcher-key (ast/matcher %)) %))
+                     (into {}))]
     (merge by-id by-matcher)))
 
 (defn- process-terminals [nonterminals explicits prods]
-  (let [starting-terms (into explicits {:asterism/empty ""})
-        terminals (atom (matcher-map starting-terms))
+  (let [initial (into explicits {:asterism/empty ""})
+        terminals (atom (terminal-lookup initial))
         prods (util/map-for [[lhs prod] prods] lhs
                 (util/set-for [alternative prod]
                   (util/vec-for [element alternative]
                     (if (contains? nonterminals element)
                       element
-                      (let [matcher (matcher-for element)
-                            id (canonical-id element)]
+                      (let [matcher (matcher-key element)
+                            id (generate-id element)]
                         (if (contains? @terminals matcher)
-                          (:id (get @terminals matcher))
+                          (ast/id (get @terminals matcher))
                           (do 
                             (swap! terminals assoc
-                              matcher (canonical-terminal [id element]))
+                              matcher (make-terminal [id element]))
                             id)))))))
         terminals (->> @terminals
-                    (map (fn [[matcher term]] [(:id term) (dissoc term :id)]))
+                    (map (fn [[matcher term]] [(ast/id term) term]))
                     (into {}))]
     [terminals prods]))
 
@@ -152,36 +174,45 @@
 
 ;;;;;;; LR(1) Table Generation ;;;;;;;
 
+(defn- get-action [table-value]
+  (if (sequential? table-value)
+    (first table-value)
+    table-value))
+
 (defn build-tables
   "Builds action and goto tables for the given grammar"
   [cc0 firsts grammar]
   (let [cc (cc cc0 firsts grammar)
         action-table (atom {})
-        goto-table (atom {})]
+        goto-table (atom {})
+        update-action-table!
+          (fn [state la value]
+            (let [existing (get-in @action-table [state la])]
+              (cond
+                (nil? existing)
+                  (swap! action-table assoc-in [state la] value)
+                (not= existing value)
+                  (throw+ {:type ::table-conflict
+                           :state state
+                           :lookahead la
+                           :values #{existing value}}))))]
     (doseq [cc-i cc]
       (doseq [[lhs rhs pos la] cc-i]
-        (cond (< pos (count rhs))
+        (cond ; shift
+              (< pos (count rhs))
                 (let [nxt (get rhs pos)]
                   (when-not (contains? (:nonterminals grammar) nxt)
-                    (swap! action-table
-                           assoc-in
-                           [cc-i nxt]
-                           [:shift (goto cc-i nxt firsts grammar)])))
-
+                    (update-action-table! cc-i nxt
+                      [:shift (goto cc-i nxt firsts grammar)])))
+              ; reduce
               (and (= pos (count rhs))
                    (not= lhs (:start grammar)))
-                (swap! action-table
-                       assoc-in
-                       [cc-i la]
-                       [:reduce lhs rhs])
-
+                (update-action-table! cc-i la [:reduce lhs rhs])
+              ; accept
               (and (= pos (count rhs))
                    (= lhs (:start grammar))
                    (= la :asterism/eof))
-                (swap! action-table
-                       assoc-in
-                       [cc-i :asterism/eof]
-                       :accept)))
+                (update-action-table! cc-i :asterism/eof :accept)))
       (doseq [n (:nonterminals grammar)]
         (let [cc-j (goto cc-i n firsts grammar)]
           (when-not (empty? cc-j)
@@ -204,7 +235,7 @@
             (if (or (nil? ws)
                     (:no-ws (meta v)))
               v
-              (interpose #{[ws]} v)))
+              (interpose ws v)))
 
           (normalize-vec [v]
             (->> v
@@ -227,13 +258,13 @@
 
 ;;;;;;;;;;;;;;;; Setup ;;;;;;;;;;;;;;;
 
-(defn valid-lookaheads [firsts state]
+(defn valid-lookaheads [state]
   (->> state
     (util/set-map
       (fn [[_ rhs pos la]]
         (if (= pos (count rhs))
-          (get firsts la)
-          (get firsts (nth rhs pos)))))
+          la
+          (nth rhs pos))))
     util/set-flatten))
 
 (defn make-grammar [start whitespace explicit-terminals prods]
@@ -255,22 +286,29 @@
   (let [firsts (generate-first-sets grammar)
         cc0 (cc0 firsts grammar)
         {:keys [action-table goto-table]} (build-tables cc0 firsts grammar)]
+    ; (println "ACTIONS")
+    ; (clojure.pprint/pprint action-table)
+    ; (println)
     (fn [input]
       (let [terminals (:terminals grammar)
             scanner (scanner/scanner input terminals)]
         (loop [pos 0
                stack (list [cc0 ::start])]
           (let [[state tree] (first stack)
-                lookaheads (valid-lookaheads firsts state)
-                possible-tokens (scanner/scan scanner pos lookaheads)]
-            (case (count possible-tokens)
-              0 (on-fail "Scanner returned no tokens" state [])
-              1 (let [[pos' token] (first possible-tokens)
-                      token-type (:type token)
+                lookaheads (valid-lookaheads state)
+                possible-tokens (scanner/scan scanner pos lookaheads)
+                num-tokens (count possible-tokens)]
+            (cond
+              (= 0 num-tokens)
+                (on-fail "Unable to parse x (expected {y, z})" state #{})
+              (> num-tokens 1)
+                (on-fail "Ambiguous input" state
+                         (util/set-map second possible-tokens))
+              :else
+                (let [[pos' token] (first possible-tokens)
+                      token-type (ast/type token)
                       table-value (get-in action-table [state token-type])
-                      action (if (sequential? table-value)
-                               (first table-value)
-                               table-value)]
+                      action (get-action table-value)]
                   (case action
                     :accept
                       (if (= token-type :asterism/eof)
@@ -281,17 +319,17 @@
                       (let [[_ lhs rhs] table-value
                             [popped remaining] (split-at (count rhs) stack)
                             state' (get-in goto-table [(ffirst remaining) lhs])
-                            node (on-reduce lhs (reverse (map second popped)))]
+                            children (flatten (reverse (map second popped)))
+                            node (if (ast/collapse? lhs)
+                                   children
+                                   (on-reduce lhs children))]
                         (recur pos (conj remaining [state' node])))
 
                     :shift
                       (let [[_ next-state] table-value]
                         (recur pos' (conj stack [next-state (on-shift token)])))
 
-                    (on-fail "No table entry" state [token])))
-
-              (->> (map second possible-tokens)
-                   (on-fail "Ambiguous state" state)))))))))
+                    (on-fail "Expected {x, y}, got z" state #{token}))))))))))
 
 ;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;;
 
@@ -302,9 +340,9 @@
         {:keys [make-node make-leaf on-failure start whitespace terminals]
          :or {make-node (fn [lhs child-trees] {:type lhs :children child-trees})
               make-leaf (fn [token] token)
-              on-failure (fn [msg state tokens] ::failure)
+              on-failure (fn [type state] ::failure)
               start (first prods)
-              whitespace #"\s*"
+              whitespace #{#"\s+" :asterism/empty}
               terminals {}}} opts
         grammar (make-grammar start whitespace terminals prods)]
     (make-parser grammar make-leaf make-node on-failure)))
@@ -320,7 +358,7 @@
 ;;;;;;;;;;; Sample Usage ;;;;;;;;;;;;;
 
 ; Recognizes simple arithmetic expressions w/ standard OoO
-(def simple-expression-parser
+(defn simple-expression-parser []
   (parser {:whitespace nil}
     :expr #{[:expr #{"+" "-"} :term]
             :term}

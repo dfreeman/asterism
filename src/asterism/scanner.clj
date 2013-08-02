@@ -1,21 +1,19 @@
 (ns asterism.scanner
-  (:require [asterism.util :as util]
+  (:require [asterism :as ast]
+            [asterism.util :as util]
             [clojure.set :as set]))
+
+;;;;;;;;;;;;;;; Models ;;;;;;;;;;;;;;;
+
+(defrecord Token [type lexeme source-info]
+  ast/IToken
+  (type [this] type)
+  (lexeme [this] lexeme)
+  (source-info [this] source-info))
 
 ;;;;;;;;;;;;;; Matching ;;;;;;;;;;;;;;
 
-(defprotocol Matchable
-  (matches? [this input offset]
-    "Tests whether this object matches the given input starting
-    at the given offset. If it does not match, returns nil. If it
-    does, returns a map containing at least the following keys:
-      :consumed - the number of characters consumed from the input
-      :lexeme - the value for the token to be produced
-    Additional keys may be defined by some implementations. For
-    instance, any internal groups in a Pattern will have their
-    matches in a :groups vector."))
-
-(extend-protocol Matchable
+(extend-protocol ast/IMatcher
   nil
   (matches? [this _ _] nil)
 
@@ -41,14 +39,11 @@
 
 ;;;;;;;;; Token Construction ;;;;;;;;;
 
-(defn make-token [id terminal offset match]
+(defn make-token [type offset match]
   (let [{:keys [lexeme consumed]} match
-        metadata (dissoc match :lexeme :consumed)]
-    (with-meta
-      {:type id
-       :lexeme lexeme}
-      (assoc metadata
-        :terminal terminal
+        source-info (dissoc match :lexeme :consumed)]
+    (->Token type lexeme
+      (assoc source-info
         :start offset
         :length consumed))))
 
@@ -57,10 +52,10 @@
 (defn dominates? [terms a-id b-id]
   (let [a-term (get terms a-id)
         b-term (get terms b-id)
-        a-classes (into #{a-id} (:classes a-term))
-        b-classes (into #{b-id} (:classes b-term))
-        a-dominates (set (:dominates a-term))
-        b-submits-to (set (:submits-to b-term))]
+        a-classes (into #{a-id} (ast/classes a-term))
+        b-classes (into #{b-id} (ast/classes b-term))
+        a-dominates (set (ast/dominates a-term))
+        b-submits-to (set (ast/submits-to b-term))]
     (or (not (empty? (set/intersection a-classes b-submits-to)))
         (not (empty? (set/intersection b-classes a-dominates))))))
 
@@ -95,7 +90,7 @@
 ;;;;;;;;; Processing Helpers ;;;;;;;;;
 
 (defn- find-maximal [tokens]
-  (let [consumed-groups (group-by #(:length (meta %)) tokens)
+  (let [consumed-groups (group-by #(:length (ast/source-info %)) tokens)
         [length group] (last (sort consumed-groups))]
     group))
 
@@ -109,27 +104,29 @@
 (defn scan [{:keys [input terminals dominance-map]} offset valid-lookahead]
   (if (>= offset (count input))
     ; If all input is consumed, EOF
-    #{[offset {:type :asterism/eof}]}
+    #{[offset (make-token :asterism/eof offset {})]}
     ; Otherwise, expand the search to include any dominating terminals...
     (let [valid-lookahead (full-dominance-set dominance-map valid-lookahead)
           matched-tokens
             (->> (for [id valid-lookahead]
                    ; attempt to match each one...
-                   (let [terminal (get terminals id)
-                         matcher (:matcher terminal)]
-                     (when-let [match (matches? matcher input offset)]
-                       (make-token id terminal offset match))))
+                   (when-let [terminal (get terminals id)]
+                     (let [matcher (ast/matcher terminal)]
+                       (when-let [match (ast/matches? matcher input offset)]
+                         (when [(and (= (:consumed match) 0)
+                                     (not= id :asterism/empty))]
+                           (make-token id offset match))))))
                  (filter identity)
                  ; but only keep the ones that consumed the most.
                  find-maximal)
-          matched-types (util/set-map :type matched-tokens)]
+          matched-types (util/set-map ast/type matched-tokens)]
       (->> matched-tokens
         ; Filter out any tokens that were dominated by other matches
         (filter
           (fn [token]
-            (let [dominators (get dominance-map (:type token))]
+            (let [dominators (get dominance-map (ast/type token))]
               (not-any? dominators matched-types))))
         ; Tag each with the new offset and return
         (util/set-map 
           (fn [token]
-            [(+ offset (:length (meta token))) token]))))))
+            [(+ offset (:length (ast/source-info token))) token]))))))

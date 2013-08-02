@@ -1,7 +1,8 @@
 (ns asterism.parser-test
   (:require [midje.sweet :refer [facts contains exactly throws]]
             [asterism.parser :refer :all]
-            [clojure.pprint :refer [pprint]]))
+            [asterism.mocks]
+            [asterism :as ast]))
 
 ; Recognizes strings of the form (^n )^n +
 (def paren-grammar
@@ -79,8 +80,8 @@
 
 (facts "on trivial grammar construction"
   (let [g (make-grammar :goal nil {} [:goal "abc"])]
-    (:terminals g) => {:string-abc {:matcher "abc"}
-                       :asterism/empty {:matcher ""}}
+    (:terminals g) => {:string-abc (make-terminal [:string-abc "abc"])
+                       :asterism/empty (make-terminal [:asterism/empty ""])}
     (:nonterminals g) => #{:asterism.parser/start :goal}
     (:start g) => :asterism.parser/start
     (:productions g) => {:asterism.parser/start #{[:goal]}
@@ -93,14 +94,14 @@
             [:a ["1" [[:b "2"]] :b r345]
              :b #{[#{"6" :a} r9] :a [7 :a 8]}])]
     (:terminals g) => 
-      {:string-1 {:matcher "1"}
-       :string-2 {:matcher "2"}
-       :pattern-345 {:matcher r345}
-       :string-6 {:matcher "6"}
-       :long-7 {:matcher 7}
-       :long-8 {:matcher 8}
-       :pattern-9 {:matcher r9}
-       :asterism/empty {:matcher ""}}))
+      {:string-1 (make-terminal [:string-1 "1"])
+       :string-2 (make-terminal [:string-2 "2"])
+       :pattern-345 (make-terminal [:pattern-345 r345])
+       :string-6 (make-terminal [:string-6 "6"])
+       :long-7 (make-terminal [:long-7 7])
+       :long-8 (make-terminal [:long-8 8])
+       :pattern-9 (make-terminal [:pattern-9 r9])
+       :asterism/empty (make-terminal [:asterism/empty ""])}))
 
 (facts "on normalization"
   (let [g (make-grammar :a nil {}
@@ -170,7 +171,8 @@
 
 (facts "on building action and goto tables"
   (let [cc0 (cc0 paren-firsts paren-grammar)
-        {:keys [action-table goto-table]} (build-tables cc0 paren-firsts paren-grammar)
+        {:keys [action-table goto-table]} 
+          (build-tables cc0 paren-firsts paren-grammar)
         actions {
           0 {:lparen [:shift (paren-cc 3)]}
           1 {:asterism/eof :accept
@@ -202,16 +204,14 @@
     (doseq [[idx expected] gotos]
       (get goto-table (paren-cc idx)) => (exactly expected))))
 
-(facts "on making a parser"
-  (let [p (parser {:whitespace nil}
-            :goal :first
-            :first ["a" "b"])]
-    (p "xxx") => :asterism.parser/failure
-    (p "ab") => 
-      {:type :goal
-       :children [{:type :first
-                   :children 
-                    [{:type :string-a
-                      :lexeme "a"}
-                     {:type :string-b
-                      :lexeme "b"}]}]}))
+(facts "on collapsing nonterminals"
+  (let [p (parser {:whitespace :space
+                   :terminals {:space " "
+                               :ident #"[a-zA-Z]\w*"}}
+            :list :<list>
+            :<list> #{[:<list> :item] :item}
+            :item :ident)
+        tree (p "a bc d")]
+    (:type tree) => :list
+    (map :type (:children tree)) =>
+      [:item :space :item :space :item]))

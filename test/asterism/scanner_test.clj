@@ -1,5 +1,8 @@
 (ns asterism.scanner-test
   (:require [midje.sweet :refer [facts]]
+            [asterism :as ast]
+            [asterism.mocks]
+            [asterism.util :as util]
             [asterism.scanner :refer :all]))
 
 (facts "on terminal dominance types"
@@ -19,7 +22,10 @@
     (dominates? terminals :ident :int) => false))
 
 (facts "on terminal dominance"
-  (let [scanner (scanner
+  (let [types (fn [tokens] 
+                (util/set-for [[offset token] tokens]
+                  (ast/type token)))
+        scanner (scanner
                   "a ab ac ad"
                   {:a {:matcher "a"
                        :dominates #{:b}}
@@ -30,14 +36,13 @@
                    :d {:matcher "ad"
                        :submits-to #{:a}}
                    :e {:matcher "a"}})]
-    (scan scanner 0 #{:a}) => #{[1 {:type :a :lexeme "a"}]}
-    (scan scanner 0 #{:b}) => #{[1 {:type :a :lexeme "a"}]}
-    (scan scanner 0 #{:c}) => #{[1 {:type :a :lexeme "a"}]}
-    (scan scanner 0 #{:d}) => #{[1 {:type :a :lexeme "a"}]}
-    (scan scanner 2 #{:a}) => #{[3 {:type :a :lexeme "a"}]}
-    (scan scanner 2 #{:b}) => #{[4 {:type :b :lexeme "ab"}]}
-    (scan scanner 5 #{:c}) => #{[7 {:type :c :lexeme "ac"}]}
-    (scan scanner 8 #{:d}) => #{[10 {:type :d :lexeme "ad"}]}
-    (scan scanner 0 #{:e}) => #{[1 {:type :e :lexeme "a"}]}
-    (scan scanner 0 #{:c :e}) => #{[1 {:type :e :lexeme "a"}]
-                                   [1 {:type :a :lexeme "a"}]}))
+    (types (scan scanner 0 #{:a})) => #{:a}
+    (types (scan scanner 0 #{:b})) => #{:a}
+    (types (scan scanner 0 #{:c})) => #{:a}
+    (types (scan scanner 0 #{:d})) => #{:a}
+    (types (scan scanner 2 #{:a})) => #{:a}
+    (types (scan scanner 2 #{:b})) => #{:b}
+    (types (scan scanner 5 #{:c})) => #{:c}
+    (types (scan scanner 8 #{:d})) => #{:d}
+    (types (scan scanner 0 #{:e})) => #{:e}
+    (types (scan scanner 0 #{:c :e})) => #{:a :e}))
