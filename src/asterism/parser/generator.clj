@@ -114,20 +114,23 @@
   iteratively including any items implied by those
   already in the set."
   [firsts grammar core]
-  (let [updated-set (atom core)]
-    (loop [items core]
-      (doseq [[lhs rhs pos la] items]
-        (if-let [nxt (nth rhs pos nil)]
-          (if (contains? (:nonterminals grammar) nxt)
-            (let [rst (conj (vec (drop (inc pos) rhs)) la)
-                  prods (get (:productions grammar) nxt)]
-              (swap! updated-set set/union
-                (set (for [rhs prods
-                           new-la (collapse-first firsts rst)]
-                       [nxt rhs 0 new-la])))))))
-      (if (= items @updated-set)
-        items
-        (recur @updated-set)))))
+  (let [{:keys [productions nonterminals]} grammar]
+    (loop [cc #{}
+           to-check core]
+      (let [cc' (into cc to-check)
+            to-check' 
+              (apply set/union
+                (for [[lhs rhs pos la] to-check]
+                  (when-let [nxt (nth rhs pos nil)]
+                    (if (contains? nonterminals nxt)
+                      (let [rst (concat (drop (inc pos) rhs) [la])
+                            prods (get productions nxt)]
+                        (util/set-for [rhs prods
+                                       new-la (collapse-first firsts rst)]
+                          [nxt rhs 0 new-la]))))))]
+        (if (empty? (set/difference to-check' cc'))
+          cc'
+          (recur cc' to-check'))))))
 
 (defn cc0
   "Generates the initial set in the canonical collection
@@ -312,10 +315,11 @@
                 num-tokens (count possible-tokens)]
             (cond
               (= 0 num-tokens)
-                (on-fail "Unable to parse x (expected {y, z})" state #{})
+                (on-fail ::no-matching-token {:parse-state state})
               (> num-tokens 1)
-                (on-fail "Ambiguous input" state
-                         (util/set-map second possible-tokens))
+                (on-fail ::multiple-matching-tokens
+                         {:parse-state state
+                          :tokens (util/set-map second possible-tokens)})
               :else
                 (let [[pos' token] (first possible-tokens)
                       token-type (parser/token-type token)
@@ -325,7 +329,8 @@
                     :accept
                       (if (= token-type :asterism/eof)
                         (second (first stack))
-                        (on-fail state token))
+                        (on-fail ::extra-input {:parser-state state 
+                                                :token token}))
 
                     :reduce
                       (let [[_ lhs rhs] table-value
@@ -345,7 +350,8 @@
                       (let [[_ next-state] table-value]
                         (recur pos' (conj stack [next-state (on-shift token)])))
 
-                    (on-fail "Expected {x, y}, got z" state #{token}))))))))))
+                    (on-fail ::no-table-action {:state-table state
+                                                :token token}))))))))))
 
 ;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;;
 
@@ -356,7 +362,7 @@
         {:keys [make-node make-leaf on-failure start whitespace terminals]
          :or {make-node (fn [lhs child-trees] {:type lhs :children child-trees})
               make-leaf (fn [token] token)
-              on-failure (fn [type state] ::failure)
+              on-failure (fn [failure-type state] [::failure failure-type state])
               start (first prods)
               whitespace #{#"\s+" :asterism/empty}
               terminals {}}} opts

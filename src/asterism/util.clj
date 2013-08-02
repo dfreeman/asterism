@@ -53,12 +53,17 @@
       (if (= arg arg') arg (recur arg')))))
 
 (defn print-tree
-  ([tree] (print-tree tree ""))
-  ([tree indent]
-    (print (str indent (:type tree)))
+  ([tree] (print-tree tree "" false))
+  ([tree indent skip-first-indent?]
+    (if skip-first-indent?
+      (print (:type tree))
+      (print (str indent (:type tree))))
     (if-let [lexeme (:lexeme tree)]
       (println (str " \"" lexeme "\""))
       (let [children (:children tree)]
-        (println)
-        (doseq [child children]
-          (print-tree child (str indent "|   ")))))))
+        (if (= 1 (count children))
+          (print-tree (first children) indent true)
+          (do
+            (println)
+            (doseq [child children]
+              (print-tree child (str indent "|   ") false))))))))
