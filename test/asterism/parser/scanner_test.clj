@@ -1,9 +1,9 @@
-(ns asterism.scanner-test
+(ns asterism.parser.scanner-test
   (:require [midje.sweet :refer [facts]]
-            [asterism :as ast]
-            [asterism.mocks]
             [asterism.util :as util]
-            [asterism.scanner :refer :all]))
+            [asterism.parser.protocols :as parser]
+            [asterism.parser.mocks]
+            [asterism.parser.scanner :refer :all]))
 
 (facts "on terminal dominance types"
   (doseq [terminals [; submits-to id
@@ -24,7 +24,7 @@
 (facts "on terminal dominance"
   (let [types (fn [tokens] 
                 (util/set-for [[offset token] tokens]
-                  (ast/type token)))
+                  (parser/token-type token)))
         scanner (scanner
                   "a ab ac ad"
                   {:a {:matcher "a"

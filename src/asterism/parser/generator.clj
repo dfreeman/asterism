@@ -1,13 +1,13 @@
-(ns asterism.parser
-  (:require [clojure.set :as set]
-            [asterism :as ast]
-            [asterism.util :as util]
-            [asterism.scanner :as scanner]
+(ns asterism.parser.generator
+  (:require [asterism.util :as util]
+            [asterism.parser.protocols :as parser]
+            [asterism.parser.scanner :as scanner]
+            [clojure.set :as set]
             [slingshot.slingshot :refer [throw+]]))
 
 ;;;;;;;;;;;;;;; Models ;;;;;;;;;;;;;;;
 
-(extend-protocol ast/INonterminal
+(extend-protocol parser/INonterminal
   clojure.lang.Keyword
   (collapse? [this]
     (let [n (name this)]
@@ -15,7 +15,7 @@
            (.endsWith n ">")))))
 
 (defrecord Terminal [id matcher opts]
-  ast/ITerminal
+  parser/ITerminal
   (id [this] id)
   (matcher [this] matcher)
   (elide? [this] (let [n (name id)]
@@ -45,9 +45,9 @@
 
 (defn- terminal-lookup [raw-terminals]
   (let [terms (util/set-map make-terminal raw-terminals)
-        by-id (into {} (map #(vector (ast/id %) %) terms))
+        by-id (into {} (map #(vector (parser/id %) %) terms))
         by-matcher (->> terms
-                     (map #(vector (matcher-key (ast/matcher %)) %))
+                     (map #(vector (matcher-key (parser/matcher %)) %))
                      (into {}))]
     (merge by-id by-matcher)))
 
@@ -62,13 +62,13 @@
                       (let [matcher (matcher-key element)
                             id (generate-id element)]
                         (if (contains? @terminals matcher)
-                          (ast/id (get @terminals matcher))
+                          (parser/id (get @terminals matcher))
                           (do 
                             (swap! terminals assoc
                               matcher (make-terminal [id element]))
                             id)))))))
         terminals (->> @terminals
-                    (map (fn [[matcher term]] [(ast/id term) term]))
+                    (map (fn [[matcher term]] [(parser/id term) term]))
                     (into {}))]
     [terminals prods]))
 
@@ -271,7 +271,7 @@
 
 (defn make-grammar [start whitespace explicit-terminals prods]
   (let [prods (->> prods
-                (concat [::start start])
+                (concat [:asterism/start start])
                 (apply hash-map)
                 (util/map-map #(normalize whitespace %2)))
         nonterminals (set (keys prods))
@@ -279,7 +279,7 @@
                             nonterminals 
                             explicit-terminals
                             prods)]
-    {:start ::start
+    {:start :asterism/start
      :terminals terminals
      :nonterminals nonterminals
      :productions prods}))
@@ -288,11 +288,11 @@
   (->> children
     (map
       (fn [child]
-        (if-not (satisfies? ast/ITerminal child)
+        (if-not (satisfies? parser/ITerminal child)
           child
-          (let [type (ast/type child)
+          (let [type (parser/token-type child)
                 term (get terminals type)]
-            (if (and term (ast/elide? term))
+            (if (and term (parser/elide? term))
               nil
               child)))))
     (filter identity)))
@@ -318,7 +318,7 @@
                          (util/set-map second possible-tokens))
               :else
                 (let [[pos' token] (first possible-tokens)
-                      token-type (ast/type token)
+                      token-type (parser/token-type token)
                       table-value (get-in action-table [state token-type])
                       action (get-action table-value)]
                   (case action
@@ -336,7 +336,7 @@
                                           reverse
                                           flatten
                                           (elide-children terminals))
-                            node (if (ast/collapse? lhs)
+                            node (if (parser/collapse? lhs)
                                    children
                                    (on-reduce lhs children))]
                         (recur pos (conj remaining [state' node])))

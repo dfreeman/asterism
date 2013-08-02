@@ -1,19 +1,19 @@
-(ns asterism.scanner
-  (:require [asterism :as ast]
+(ns asterism.parser.scanner
+  (:require [asterism.parser.protocols :as parser]
             [asterism.util :as util]
             [clojure.set :as set]))
 
 ;;;;;;;;;;;;;;; Models ;;;;;;;;;;;;;;;
 
 (defrecord Token [type lexeme source-info]
-  ast/IToken
-  (type [this] type)
+  parser/IToken
+  (token-type [this] type)
   (lexeme [this] lexeme)
   (source-info [this] source-info))
 
 ;;;;;;;;;;;;;; Matching ;;;;;;;;;;;;;;
 
-(extend-protocol ast/IMatcher
+(extend-protocol parser/IMatcher
   nil
   (matches? [this _ _] nil)
 
@@ -52,10 +52,10 @@
 (defn dominates? [terms a-id b-id]
   (let [a-term (get terms a-id)
         b-term (get terms b-id)
-        a-classes (into #{a-id} (ast/classes a-term))
-        b-classes (into #{b-id} (ast/classes b-term))
-        a-dominates (set (ast/dominates a-term))
-        b-submits-to (set (ast/submits-to b-term))]
+        a-classes (into #{a-id} (parser/classes a-term))
+        b-classes (into #{b-id} (parser/classes b-term))
+        a-dominates (set (parser/dominates a-term))
+        b-submits-to (set (parser/submits-to b-term))]
     (or (not (empty? (set/intersection a-classes b-submits-to)))
         (not (empty? (set/intersection b-classes a-dominates))))))
 
@@ -90,7 +90,7 @@
 ;;;;;;;;; Processing Helpers ;;;;;;;;;
 
 (defn- find-maximal [tokens]
-  (let [consumed-groups (group-by #(:length (ast/source-info %)) tokens)
+  (let [consumed-groups (group-by #(:length (parser/source-info %)) tokens)
         [length group] (last (sort consumed-groups))]
     group))
 
@@ -111,22 +111,22 @@
             (->> (for [id valid-lookahead]
                    ; attempt to match each one...
                    (when-let [terminal (get terminals id)]
-                     (let [matcher (ast/matcher terminal)]
-                       (when-let [match (ast/matches? matcher input offset)]
+                     (let [matcher (parser/matcher terminal)]
+                       (when-let [match (parser/matches? matcher input offset)]
                          (when [(and (= (:consumed match) 0)
                                      (not= id :asterism/empty))]
                            (make-token id offset match))))))
                  (filter identity)
                  ; but only keep the ones that consumed the most.
                  find-maximal)
-          matched-types (util/set-map ast/type matched-tokens)]
+          matched-types (util/set-map parser/token-type matched-tokens)]
       (->> matched-tokens
         ; Filter out any tokens that were dominated by other matches
         (filter
           (fn [token]
-            (let [dominators (get dominance-map (ast/type token))]
+            (let [dominators (get dominance-map (parser/token-type token))]
               (not-any? dominators matched-types))))
         ; Tag each with the new offset and return
         (util/set-map 
           (fn [token]
-            [(+ offset (:length (ast/source-info token))) token]))))))
+            [(+ offset (:length (parser/source-info token))) token]))))))

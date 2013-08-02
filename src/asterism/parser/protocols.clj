@@ -1,4 +1,4 @@
-(ns asterism
+(ns asterism.parser.protocols
   (:refer-clojure :exclude [type]))
 
 (defprotocol IMatcher
@@ -13,8 +13,8 @@
 
 (defprotocol INonterminal
   (collapse? [this] 
-    "If true, this nonterminal will be collapsed, including its children
-    directly in its parent's child list instead."))
+    "If true, this nonterminal will be collapsed, splicing its descendants
+    directly into its parent's list of children"))
 
 (defprotocol ITerminal
   (id [this] "The ID of this terminal")
@@ -25,6 +25,6 @@
   (submits-to [this] "The IDs/classes of terminals which dominate this one"))
 
 (defprotocol IToken
-  (type [this] "The ID of the terminal that produced this token")
+  (token-type [this] "The ID of the terminal that produced this token")
   (lexeme [this] "The lexeme that this token consumed")
   (source-info [this] "Metadata regarding where this token originated in source"))

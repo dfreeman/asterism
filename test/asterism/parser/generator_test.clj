@@ -1,8 +1,7 @@
-(ns asterism.parser-test
+(ns asterism.parser.generator-test
   (:require [midje.sweet :refer [facts contains exactly throws]]
-            [asterism.parser :refer :all]
-            [asterism.mocks]
-            [asterism :as ast]))
+            [asterism.parser.mocks]
+            [asterism.parser.generator :refer :all]))
 
 ; Recognizes strings of the form (^n )^n +
 (def paren-grammar
@@ -14,7 +13,7 @@
 
 ; Firsts sets
 (def paren-firsts
-  {:asterism.parser/start #{:lparen}
+  {:asterism/start #{:lparen}
    :pair #{:lparen}
    :list #{:lparen}
    :lparen #{:lparen}
@@ -25,7 +24,7 @@
 ; CC for the paren-grammar
 (def paren-cc [
   ; cc0
-  #{[:asterism.parser/start [:list] 0 :asterism/eof]
+  #{[:asterism/start [:list] 0 :asterism/eof]
     [:list [:list :pair] 0 :lparen]
     [:list [:list :pair] 0 :asterism/eof]
     [:list [:pair] 0 :lparen]
@@ -35,7 +34,7 @@
     [:pair [:lparen :rparen] 0 :lparen]
     [:pair [:lparen :rparen] 0 :asterism/eof]}
   ; cc1
-  #{[:asterism.parser/start [:list] 1 :asterism/eof]
+  #{[:asterism/start [:list] 1 :asterism/eof]
     [:list [:list :pair] 1 :asterism/eof]
     [:list [:list :pair] 1 :lparen]
     [:pair [:lparen :pair :rparen] 0 :asterism/eof]
@@ -82,9 +81,9 @@
   (let [g (make-grammar :goal nil {} [:goal "abc"])]
     (:terminals g) => {:string-abc (make-terminal [:string-abc "abc"])
                        :asterism/empty (make-terminal [:asterism/empty ""])}
-    (:nonterminals g) => #{:asterism.parser/start :goal}
-    (:start g) => :asterism.parser/start
-    (:productions g) => {:asterism.parser/start #{[:goal]}
+    (:nonterminals g) => #{:asterism/start :goal}
+    (:start g) => :asterism/start
+    (:productions g) => {:asterism/start #{[:goal]}
                          :goal #{[:string-abc]}}))
 
 (facts "on discovering terminals"

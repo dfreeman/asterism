@@ -1,11 +1,11 @@
-(ns asterism.mocks
-  (:require [asterism :as ast]
+(ns asterism.parser.mocks
+  (:require [asterism.parser.protocols :as parser]
             [midje.sweet :refer [facts]]))
 
 (facts "to make that warning go away"
   true => true)
 
-(extend-protocol ast/ITerminal
+(extend-protocol parser/ITerminal
   clojure.lang.Associative
   (id [this] (:id this))
   (matcher [this] (:matcher this))
@@ -14,8 +14,8 @@
   (dominates [this] (:dominates this))
   (submits-to [this] (:submits-to this)))
 
-(extend-protocol ast/IToken
+(extend-protocol parser/IToken
   clojure.lang.Associative
-  (type [this] (:type this))
+  (token-type [this] (:type this))
   (lexeme [this] (:lexeme this))
   (source-info [this] (:source-info this)))
