@@ -27,6 +27,7 @@
                   (parser/token-type token)))
         scanner (scanner
                   "a ab ac ad"
+                  nil
                   {:a {:matcher "a"
                        :dominates #{:b}}
                    :b {:matcher "ab"

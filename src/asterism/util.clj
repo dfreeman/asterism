@@ -55,9 +55,10 @@
 (defn print-tree
   ([tree] (print-tree tree "" false))
   ([tree indent skip-first-indent?]
-    (if skip-first-indent?
-      (print (:type tree))
-      (print (str indent (:type tree))))
+    (let [type (or (:type tree) (:token-type tree))]
+      (if skip-first-indent?
+        (print type)
+        (print (str indent type))))
     (if-let [lexeme (:lexeme tree)]
       (println (str " \"" lexeme "\""))
       (let [children (:children tree)]

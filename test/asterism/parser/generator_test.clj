@@ -5,7 +5,7 @@
 
 ; Recognizes strings of the form (^n )^n +
 (def paren-grammar
-  (make-grammar :list nil
+  (make-grammar :list
     {:lparen "("
      :rparen ")"}
     [:list #{[:list :pair] :pair}
@@ -78,7 +78,7 @@
 
 
 (facts "on trivial grammar construction"
-  (let [g (make-grammar :goal nil {} [:goal "abc"])]
+  (let [g (make-grammar :goal {} [:goal "abc"])]
     (:terminals g) => {:string-abc (make-terminal [:string-abc "abc"])
                        :asterism/empty (make-terminal [:asterism/empty ""])}
     (:nonterminals g) => #{:asterism/start :goal}
@@ -89,7 +89,7 @@
 (facts "on discovering terminals"
   (let [r345 #"345" ; Patterns use identity
         r9 #"9"     ; to judge equality
-        g (make-grammar :a nil {}
+        g (make-grammar :a {}
             [:a ["1" [[:b "2"]] :b r345]
              :b #{[#{"6" :a} r9] :a ["7" :a "8"]}])]
     (:terminals g) => 
@@ -103,7 +103,7 @@
        :asterism/empty (make-terminal [:asterism/empty ""])}))
 
 (facts "on normalization"
-  (let [g (make-grammar :a nil {}
+  (let [g (make-grammar :a {}
             [:a ["1" "2"]
              :b #{"1" #{["2" "3"] ["4" "5"]}}
              :c ["1" #{"2" ["3" "4"]}]
@@ -114,27 +114,8 @@
     (:c p) => #{[:string-1 :string-2] [:string-1 :string-3 :string-4]}
     (:d p) => #{[:a]}))
 
-(facts "on whitespace injection"
-  (let [g (make-grammar :a "BLANK" {}
-            [:a ["1" "2"]
-             :b #{["1" "2"] ["3" "4"]}
-             :c ["1" #{"2" "3"}]
-             :d [:a :b :c]
-             :e (no-ws "1" "2")
-             :f #{["1" (no-ws "2" "3") "4"]}])
-        p (:productions g)]
-    (:a p) => #{[:string-1 :string-BLANK :string-2]}
-    (:b p) => #{[:string-1 :string-BLANK :string-2]
-                [:string-3 :string-BLANK :string-4]}
-    (:c p) => #{[:string-1 :string-BLANK :string-2]
-                [:string-1 :string-BLANK :string-3]}
-    (:d p) => #{[:a :string-BLANK :b :string-BLANK :c]}
-    (:e p) => #{[:string-1 :string-2]}
-    (:f p) => #{[:string-1 :string-BLANK :string-2 
-                 :string-3 :string-BLANK :string-4]}))
-
 (facts "on computing FIRST(x)"
-  (let [g (make-grammar :a nil {}
+  (let [g (make-grammar :a {}
             [:a #{"a1" ["a2" "a3"] ""}
              :b #{"b1" [#{"b2" "b3"} "b4"]}
              :c [:a :b]])

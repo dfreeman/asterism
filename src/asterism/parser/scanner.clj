@@ -18,7 +18,7 @@
 
 (extend-protocol parser/IMatcher
   nil
-  (matches? [this _ _ _] nil)
+  (matches? [this _ _ _ _] nil)
 
   java.lang.String
   (matches? [this input offset type source-info]
@@ -103,31 +103,35 @@
 
 ;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;;
 
-(defn scanner [input terminals]
+(defn scanner [input whitespace terminals]
   {:input input
    :terminals terminals
+   :whitespace whitespace
    :dominance-map (dominance-map terminals)})
 
-(defn scan [{:keys [input terminals dominance-map]} offset valid-lookahead]
-  (if (>= offset (count input))
-    ; If all input is consumed, EOF
-    #{[offset (make-token :asterism/eof offset {})]}
-    ; Otherwise, expand the search to include any dominating terminals...
-    (let [valid-lookahead (full-dominance-set dominance-map valid-lookahead)
-          matched-tokens
-            (->> valid-lookahead
-                 ; attempt to match each one... 
-                 (find-matches terminals input offset)
-                 ; but only keep the ones that consumed the most.
-                 find-maximal)
-          matched-types (util/set-map parser/token-type matched-tokens)]
-      (->> matched-tokens
-        ; Filter out any tokens that were dominated by other matches
-        (filter
-          (fn [token]
-            (let [dominators (get dominance-map (parser/token-type token))]
-              (not-any? dominators matched-types))))
-        ; Tag each with the new offset and return
-        (util/set-map 
-          (fn [token]
-            [(+ offset (:length (parser/source-info token))) token]))))))
+(defn scan [{:keys [input whitespace terminals dominance-map]}
+            offset valid-lookahead]
+  (let [[consumed _] (parser/matches? whitespace input offset nil {})
+        offset (+ offset (or consumed 0))]
+    (if (>= offset (count input))
+      ; If all input is consumed, EOF
+      #{[offset (make-token :asterism/eof offset {})]}
+      ; Otherwise, expand the search to include any dominating terminals...
+      (let [valid-lookahead (full-dominance-set dominance-map valid-lookahead)
+            matched-tokens
+              (->> valid-lookahead
+                   ; attempt to match each one... 
+                   (find-matches terminals input offset)
+                   ; but only keep the ones that consumed the most.
+                   find-maximal)
+            matched-types (util/set-map parser/token-type matched-tokens)]
+        (->> matched-tokens
+          ; Filter out any tokens that were dominated by other matches
+          (filter
+            (fn [token]
+              (let [dominators (get dominance-map (parser/token-type token))]
+                (not-any? dominators matched-types))))
+          ; Tag each with the new offset and return
+          (util/set-map 
+            (fn [token]
+              [(+ offset (:length (parser/source-info token))) token])))))))

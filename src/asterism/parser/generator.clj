@@ -242,28 +242,22 @@
 (defn normalize
   "Takes an arbitrary grammar RHS fragment and returns a single set
   of vectors, each containing only elements of (T u NT)"
-  [ws rhs]
+  [rhs]
   (letfn [(append-all [lhs-vecs rhs-vecs]
             (set (for [lhs lhs-vecs
                        rhs rhs-vecs]
                     (vec (concat lhs rhs)))))
 
-          (interpose-ws [v]
-            (if (or (nil? ws)
-                    (:no-ws (meta v)))
-              v
-              (interpose ws v)))
-
           (normalize-vec [v]
             (->> v
-              interpose-ws
-              (util/vec-map #(normalize ws %))
+              ; interpose-ws
+              (util/vec-map #(normalize %))
               (reduce append-all #{[]})
               util/set-flatten))
 
           (normalize-set [s]
             (->> s
-              (util/set-map #(normalize ws %))
+              (util/set-map #(normalize %))
               util/set-flatten))
 
           (normalize-node [x] #{[x]})]
@@ -284,11 +278,11 @@
           (nth rhs pos))))
     util/set-flatten))
 
-(defn make-grammar [start whitespace explicit-terminals prods]
+(defn make-grammar [start explicit-terminals prods]
   (let [prods (->> prods
                 (concat [:asterism/start start])
                 (apply hash-map)
-                (util/map-map #(normalize whitespace %2)))
+                (util/map-map #(normalize %2)))
         nonterminals (set (keys prods))
         [terminals prods] (process-terminals 
                             nonterminals 
@@ -312,13 +306,13 @@
               child)))))
     (filter identity)))
 
-(defn- make-parser [grammar on-shift on-reduce on-fail]
+(defn- make-parser [grammar whitespace on-shift on-reduce on-fail]
   (let [firsts (generate-first-sets grammar)
         cc0 (cc0 firsts grammar)
         {:keys [action-table goto-table]} (build-tables cc0 firsts grammar)]
     (fn [input]
       (let [terminals (:terminals grammar)
-            scanner (scanner/scanner input terminals)]
+            scanner (scanner/scanner input whitespace terminals)]
         (loop [pos 0
                stack (list [cc0 ::start])]
           (let [[state tree] (first stack)
@@ -376,24 +370,16 @@
               make-leaf (fn [token] token)
               on-failure (fn [failure-type state] [::failure failure-type state])
               start (first prods)
-              whitespace #{#"\s+" :asterism/empty}
+              whitespace #"\s*"
               terminals #{}}} opts
-        grammar (make-grammar start whitespace terminals prods)]
-    (make-parser grammar make-leaf make-node on-failure)))
-
-(defn no-ws [& args]
-  (with-meta
-    (if (and (= (count args) 1)
-             (vector? (first args)))
-      (first args)
-      (vec args))
-    {:no-ws true}))
+        grammar (make-grammar start terminals prods)]
+    (make-parser grammar whitespace make-leaf make-node on-failure)))
 
 ;;;;;;;;;;; Sample Usage ;;;;;;;;;;;;;
 
 ; Recognizes simple arithmetic expressions w/ standard OoO
 (defn simple-expression-parser []
-  (parser {:whitespace nil}
+  (parser
     :expr #{[:expr #{"+" "-"} :term]
             :term}
     :term #{[:term #{"*" "/"} :factor]
