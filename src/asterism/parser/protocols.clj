@@ -13,7 +13,6 @@
     directly into its parent's list of children"))
 
 (defprotocol ITerminal
-  (id [this] "The ID of this terminal")
   (matcher [this] "The IMatcher this terminal uses to consume input")
   (elide? [this] "If true, this terminal will not be included in the tree")
   (classes [this] "The classes to which this terminal belongs")
@@ -24,3 +23,15 @@
   (token-type [this] "The ID of the terminal that produced this token")
   (lexeme [this] "The lexeme that this token consumed")
   (source-info [this] "Metadata regarding where this token originated in source"))
+
+(defn matcher? [x]
+  (satisfies? IMatcher x))
+
+(defn nonterminal? [x]
+  (satisfies? INonterminal x))
+
+(defn terminal? [x]
+  (satisfies? ITerminal x))
+
+(defn token? [x]
+  (satisfies? IToken x))
