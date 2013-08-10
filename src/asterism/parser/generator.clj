@@ -287,7 +287,7 @@
               child)))))
     (filter identity)))
 
-(defn- make-parser [grammar whitespace on-shift on-reduce on-fail]
+(defn- make-parser [grammar whitespace on-shift on-reduce]
   (let [firsts (generate-first-sets grammar)
         cc0 (cc0 firsts grammar)
         {:keys [action-table goto-table]} (build-tables cc0 firsts grammar)]
@@ -302,11 +302,11 @@
                 num-tokens (count possible-tokens)]
             (cond
               (= 0 num-tokens)
-                (on-fail ::no-matching-token {:parse-state state})
+                (throw+ {:typw ::no-matching-token :parse-state state})
               (> num-tokens 1)
-                (on-fail ::multiple-matching-tokens
-                         {:parse-state state
-                          :tokens (util/set-map second possible-tokens)})
+                (throw+ {:type ::multiple-matching-tokens
+                         :parse-state state
+                         :tokens (util/set-map second possible-tokens)})
               :else
                 (let [[pos' token] (first possible-tokens)
                       token-type (parser/token-type token)
@@ -316,8 +316,9 @@
                     :accept
                       (if (= token-type :asterism/eof)
                         (second (first stack))
-                        (on-fail ::extra-input {:parser-state state 
-                                                :token token}))
+                        (throw+ {:type ::extra-input
+                                 :parser-state state 
+                                 :token token}))
 
                     :reduce
                       (let [[_ lhs rhs] table-value
@@ -337,8 +338,9 @@
                       (let [[_ next-state] table-value]
                         (recur pos' (conj stack [next-state (on-shift token)])))
 
-                    (on-fail ::no-table-action {:state-table state
-                                                :token token}))))))))))
+                    (throw+ {:type ::no-table-action
+                             :state-table state
+                             :token token}))))))))))
 
 ;;;;;;;;;;;;;;; Models ;;;;;;;;;;;;;;;
 
@@ -365,15 +367,14 @@
   "Creates a parser for the given productions, using the given options."
   [opts & prods]
   (let [[opts prods] (if (map? opts) [opts prods] [{} (cons opts prods)])
-        {:keys [make-node make-leaf on-failure start whitespace terminals]
+        {:keys [make-node make-leaf start whitespace terminals]
          :or {make-node (fn [lhs child-trees] {:type lhs :children child-trees})
               make-leaf (fn [token] token)
-              on-failure (fn [failure-type state] [::failure failure-type state])
               start (first prods)
               whitespace #"\s*"
               terminals #{}}} opts
         grammar (make-grammar start terminals prods)]
-    (make-parser grammar whitespace make-leaf make-node on-failure)))
+    (make-parser grammar whitespace make-leaf make-node)))
 
 ;;;;;;;;;;; Sample Usage ;;;;;;;;;;;;;
 
