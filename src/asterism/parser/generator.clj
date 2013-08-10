@@ -5,39 +5,26 @@
             [clojure.set :as set]
             [slingshot.slingshot :refer [throw+]]))
 
-;;;;;;;;;;;;;;; Models ;;;;;;;;;;;;;;;
-
-(extend-protocol parser/INonterminal
-  clojure.lang.Keyword
-  (collapse? [this]
-    (let [n (name this)]
-      (and (.startsWith n "<")
-           (.endsWith n ">")))))
-
-(extend-protocol parser/ITerminal
-  clojure.lang.IPersistentMap
-  (id [this] (:id this))
-  (matcher [this] (:matcher this))
-  (elide? [this] (let [n (name (parser/id this))]
-                   (and (.startsWith n "<")
-                        (.endsWith n ">"))))
-  (classes [this] (into #{(parser/id this)} (:classes this)))
-  (dominates [this] (:dominates this #{}))
-  (submits-to [this] (:submits-to this #{})))
-
 ;;;;;;;; Terminal Processing ;;;;;;;;;
 
+(defn- term-id [terminal]
+  (:id (meta terminal)))
+
 (defn make-terminal [[id definition]]
-  (cond 
-    (and (map? definition)
-         (satisfies? parser/IMatcher (:matcher definition)))
-      (assoc definition :id id)
-    (satisfies? parser/ITerminal definition)
-      definition
-    (satisfies? parser/IMatcher definition)
-      {:id id :matcher definition}
-    :else
-      (throw+ {:type ::invalid-terminal :id id :definition definition})))
+  (let [invalid-term {:type ::invalid-terminal :id id :definition definition}]
+    (cond 
+      (map? definition)
+        (if (parser/matcher? (:matcher definition))
+          (vary-meta definition assoc :id id)
+          (throw+ (assoc invalid-term :msg "Invalid matcher")))
+      (parser/terminal? definition)
+        (if (instance? clojure.lang.IMeta definition)
+          (vary-meta definition assoc :id id)
+          (throw+ (assoc invalid-term :msg "ITerminals must support metadata")))
+      (parser/matcher? definition)
+        (with-meta {:matcher definition} {:id id})
+      :else
+        (throw+ invalid-term))))
 
 (defn- generate-id [matcher]
   (let [type (.toLowerCase (.getSimpleName (type matcher)))]
@@ -50,19 +37,14 @@
 
 (defn- terminal-lookup [raw-terminals]
   (let [terms (util/set-map make-terminal raw-terminals)
-        by-id (into {} (map #(vector (parser/id %) %) terms))
+        by-id (into {} (map #(vector (term-id %) %) terms))
         by-matcher (->> terms
                      (map #(vector (matcher-key (parser/matcher %)) %))
                      (into {}))]
     (merge by-id by-matcher)))
 
 (defn- process-terminals [nonterminals explicits prods]
-  (let [explicits (if (map? explicits) 
-                    explicits
-                    (util/map-for [term explicits]
-                      (parser/id term)
-                      term))
-        initial (into explicits {:asterism/empty ""})
+  (let [initial (into explicits {:asterism/empty ""})
         terminals (atom (terminal-lookup initial))
         prods (util/map-for [[lhs prod] prods] lhs
                 (util/set-for [alternative prod]
@@ -72,13 +54,13 @@
                       (let [matcher (matcher-key element)
                             id (generate-id element)]
                         (if (contains? @terminals matcher)
-                          (parser/id (get @terminals matcher))
+                          (term-id (get @terminals matcher))
                           (do 
                             (swap! terminals assoc
                               matcher (make-terminal [id element]))
                             id)))))))
         terminals (->> @terminals
-                    (map (fn [[matcher term]] [(parser/id term) term]))
+                    (map (fn [[matcher term]] [(term-id term) term]))
                     (into {}))]
     [terminals prods]))
 
@@ -250,7 +232,6 @@
 
           (normalize-vec [v]
             (->> v
-              ; interpose-ws
               (util/vec-map #(normalize %))
               (reduce append-all #{[]})
               util/set-flatten))
@@ -358,6 +339,25 @@
 
                     (on-fail ::no-table-action {:state-table state
                                                 :token token}))))))))))
+
+;;;;;;;;;;;;;;; Models ;;;;;;;;;;;;;;;
+
+(extend-protocol parser/INonterminal
+  clojure.lang.Keyword
+  (collapse? [this]
+    (let [n (name this)]
+      (and (.startsWith n "<")
+           (.endsWith n ">")))))
+
+(extend-protocol parser/ITerminal
+  clojure.lang.IPersistentMap
+  (matcher [this] (:matcher this))
+  (elide? [this] (let [n (name (term-id this))]
+                   (and (.startsWith n "<")
+                        (.endsWith n ">"))))
+  (classes [this] (:classes this #{}))
+  (dominates [this] (:dominates this #{}))
+  (submits-to [this] (:submits-to this #{})))
 
 ;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;;
 
