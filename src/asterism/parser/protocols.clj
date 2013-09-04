@@ -12,6 +12,7 @@
     "If true, this nonterminal will be collapsed, splicing its descendants
     directly into its parent's list of children"))
 
+; Must be instances of IMeta
 (defprotocol ITerminal
   (matcher [this] "The IMatcher this terminal uses to consume input")
   (elide? [this] "If true, this terminal will not be included in the tree")
