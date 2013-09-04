@@ -302,7 +302,7 @@
                 num-tokens (count possible-tokens)]
             (cond
               (= 0 num-tokens)
-                (throw+ {:typw ::no-matching-token :parse-state state})
+                (throw+ {:type ::no-matching-token :parse-state state})
               (> num-tokens 1)
                 (throw+ {:type ::multiple-matching-tokens
                          :parse-state state
@@ -331,7 +331,7 @@
                                           (elide-children terminals))
                             node (if (parser/collapse? lhs)
                                    children
-                                   (on-reduce lhs children))]
+                                   (on-reduce lhs rhs children))]
                         (recur pos (conj remaining [state' node])))
 
                     :shift
@@ -345,7 +345,7 @@
 ;;;;;;;;;;;;;;; Models ;;;;;;;;;;;;;;;
 
 (extend-protocol parser/INonterminal
-  clojure.lang.Keyword
+  clojure.lang.Named
   (collapse? [this]
     (let [n (name this)]
       (and (.startsWith n "<")
@@ -368,7 +368,8 @@
   [opts & prods]
   (let [[opts prods] (if (map? opts) [opts prods] [{} (cons opts prods)])
         {:keys [make-node make-leaf start whitespace terminals]
-         :or {make-node (fn [lhs child-trees] {:type lhs :children child-trees})
+         :or {make-node (fn [lhs rhs child-trees]
+                          {:type lhs :children child-trees})
               make-leaf (fn [token] token)
               start (first prods)
               whitespace #"\s*"
