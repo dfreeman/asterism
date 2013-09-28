@@ -36,8 +36,7 @@
               groups (inc (.groupCount matcher))]
           [consumed (make-token type (.group matcher) source-info
                       :length consumed
-                      :groups (util/vec-for [i (range 1 groups)]
-                                (.group matcher i)))]))))
+                      :groups (mapv #(.group matcher %) (range 1 groups)))]))))
 
   clojure.lang.IFn
   (matches? [this input offset type source-info]
@@ -74,19 +73,18 @@
         ; Map each id to the set of ids that directly dominate it
         initial-doms 
           (->> term-ids
-            (util/set-map 
+            (map
               (fn [id]
                 (->> term-ids
-                  (util/set-filter #(dominates? terminals % id))
+                  (filter #(dominates? terminals % id))
+                  (set)
                   (vector id))))
             (into {}))]
     ; Keep rolling in indirect dominators until reaching a fixed point
     (util/fixed-point
       initial-doms
       (fn [doms]
-        (util/map-map
-          (fn [id dominators] (full-dominance-set doms dominators))
-          doms)))))
+        (reduce-kv #(assoc %1 %2 (full-dominance-set doms %3)) {} doms)))))
 
 ;;;;;;;;; Processing Helpers ;;;;;;;;;
 
@@ -130,7 +128,7 @@
                    (find-matches terminals input offset)
                    ; but only keep the ones that consumed the most.
                    find-maximal)
-            matched-types (util/set-map parser/token-type matched-tokens)]
+            matched-types (set (map parser/token-type matched-tokens))]
         (->> matched-tokens
           ; Filter out any tokens that were dominated by other matches
           (filter
@@ -138,6 +136,5 @@
               (let [dominators (get dominance-map (parser/token-type token))]
                 (not-any? dominators matched-types))))
           ; Tag each with the new offset and return
-          (util/set-map 
-            (fn [token]
-              [(+ offset (:length (parser/source-info token))) token])))))))
+          (map (fn [token] [(+ offset (:length (parser/source-info token))) token]))
+          (set))))))

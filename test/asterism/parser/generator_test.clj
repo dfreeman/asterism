@@ -186,15 +186,3 @@
       (get action-table (paren-cc idx)) => (exactly expected))
     (doseq [[idx expected] gotos]
       (get goto-table (paren-cc idx)) => (exactly expected))))
-
-(facts "on collapsing nonterminals and eliding terminals"
-  (let [p (parser {:whitespace nil
-                   :terminals {:<space> " "
-                               :ident #"[a-zA-Z]\w*"}}
-            :list :<list>
-            :<list> #{[:<list> :<space> :<item>] :<item>}
-            :<item> :ident)
-        tree (p "a bc d")]
-    (:type tree) => :list
-    (map parser/lexeme (:children tree)) =>
-      ["a" "bc" "d"]))

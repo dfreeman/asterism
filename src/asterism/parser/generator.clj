@@ -2,6 +2,7 @@
   (:require [asterism.util :as util]
             [asterism.parser.protocols :as parser]
             [asterism.parser.scanner :as scanner]
+            [asterism.parser.handler :as handler]
             [clojure.set :as set]
             [slingshot.slingshot :refer [throw+]]))
 
@@ -14,14 +15,14 @@
   (let [invalid-term {:type ::invalid-terminal :id id :definition definition}]
     (cond 
       (map? definition)
-        (if (parser/matcher? (:matcher definition))
+        (if (satisfies? parser/IMatcher (:matcher definition))
           (vary-meta definition assoc :id id)
           (throw+ (assoc invalid-term :msg "Invalid matcher")))
-      (parser/terminal? definition)
+      (satisfies? parser/ITerminal definition)
         (if (instance? clojure.lang.IMeta definition)
           (vary-meta definition assoc :id id)
           (throw+ (assoc invalid-term :msg "ITerminals must support metadata")))
-      (parser/matcher? definition)
+      (satisfies? parser/IMatcher definition)
         (with-meta {:matcher definition} {:id id})
       :else
         (throw+ invalid-term))))
@@ -31,12 +32,12 @@
     (keyword (str type "-" matcher))))
 
 (defn- matcher-key [literal]
-  (if (util/regex? literal)
+  (if (instance? java.util.regex.Pattern literal)
     {:pattern (str literal)}
     literal))
 
 (defn- terminal-lookup [raw-terminals]
-  (let [terms (util/set-map make-terminal raw-terminals)
+  (let [terms (set (map make-terminal raw-terminals))
         by-id (into {} (map #(vector (term-id %) %) terms))
         by-matcher (->> terms
                      (map #(vector (matcher-key (parser/matcher %)) %))
@@ -46,9 +47,10 @@
 (defn- process-terminals [nonterminals explicits prods]
   (let [initial (into explicits {:asterism/empty ""})
         terminals (atom (terminal-lookup initial))
-        prods (util/map-for [[lhs prod] prods] lhs
-                (util/set-for [alternative prod]
-                  (util/vec-for [element alternative]
+        prods (into {} (for [[lhs prod] prods]
+                [lhs
+                (set (for [alternative prod]
+                  (vec (for [element alternative]
                     (if (contains? nonterminals element)
                       element
                       (let [matcher (matcher-key element)
@@ -61,7 +63,7 @@
                           (do 
                             (swap! terminals assoc
                               matcher (make-terminal [id element]))
-                            id)))))))
+                            id))))))))]))
         terminals (->> @terminals
                     (map (fn [[matcher term]] [(term-id term) term]))
                     (into {}))]
@@ -121,9 +123,10 @@
                       (if (contains? nonterminals nxt)
                         (let [rst (concat (drop (inc pos) rhs) [la])
                               prods (get productions nxt)]
-                          (util/set-for [rhs prods
-                                         new-la (collapse-first firsts rst)]
-                            [nxt rhs 0 new-la])))))
+                          (set
+                            (for [rhs prods
+                                  new-la (collapse-first firsts rst)]
+                              [nxt rhs 0 new-la]))))))
                   to-check))]
         (if (empty? (set/difference to-check' cc'))
           cc'
@@ -136,7 +139,8 @@
   (let [start (:start grammar)
         start-prods (start (:productions grammar))]
     (->> start-prods
-      (util/set-map (fn [rhs] [start rhs 0 :asterism/eof]))
+      (map (fn [rhs] [start rhs 0 :asterism/eof]))
+      (set)
       (closure firsts grammar))))
 
 ; LR(1) item: [lhs rhs position lookahead]
@@ -235,13 +239,15 @@
 
           (normalize-vec [v]
             (->> v
-              (util/vec-map #(normalize %))
+              (map #(normalize %))
+              (vec)
               (reduce append-all #{[]})
               util/set-flatten))
 
           (normalize-set [s]
             (->> s
-              (util/set-map #(normalize %))
+              (map #(normalize %))
+              (set)
               util/set-flatten))
 
           (normalize-node [x] #{[x]})]
@@ -255,18 +261,19 @@
 
 (defn valid-lookaheads [state]
   (->> state
-    (util/set-map
+    (map
       (fn [[_ rhs pos la]]
         (if (= pos (count rhs))
           la
           (nth rhs pos))))
+    (set)
     util/set-flatten))
 
 (defn make-grammar [start explicit-terminals prods]
   (let [prods (->> prods
                 (apply hash-map)
                 (#(assoc % :asterism/start start))
-                (util/map-map #(normalize %2)))
+                (reduce-kv #(assoc %1 %2 (normalize %3)) {}))
         nonterminals (set (keys prods))
         [terminals prods] (process-terminals 
                             nonterminals 
@@ -276,19 +283,6 @@
      :terminals terminals
      :nonterminals nonterminals
      :productions prods}))
-
-(defn- elide-children [terminals children]
-  (->> children
-    (map
-      (fn [child]
-        (if-not (satisfies? parser/ITerminal child)
-          child
-          (let [type (parser/token-type child)
-                term (get terminals type)]
-            (if (and term (parser/elide? term))
-              nil
-              child)))))
-    (filter identity)))
 
 (defn- make-parser [grammar whitespace on-shift on-reduce]
   (let [firsts (generate-first-sets grammar)
@@ -309,7 +303,7 @@
               (> num-tokens 1)
                 (throw+ {:type ::multiple-matching-tokens
                          :parse-state state
-                         :tokens (util/set-map second possible-tokens)})
+                         :tokens (set (map second possible-tokens))})
               :else
                 (let [[pos' token] (first possible-tokens)
                       token-type (parser/token-type token)
@@ -330,11 +324,8 @@
                             children (->> popped
                                           (map second)
                                           reverse
-                                          flatten
-                                          (elide-children terminals))
-                            node (if (parser/collapse? lhs)
-                                   children
-                                   (on-reduce lhs rhs children))]
+                                          flatten)
+                            node (on-reduce lhs rhs children)]
                         (recur pos (conj remaining [state' node])))
 
                     :shift
@@ -347,19 +338,9 @@
 
 ;;;;;;;;;;;;;;; Models ;;;;;;;;;;;;;;;
 
-(extend-protocol parser/INonterminal
-  clojure.lang.Named
-  (collapse? [this]
-    (let [n (name this)]
-      (and (.startsWith n "<")
-           (.endsWith n ">")))))
-
 (extend-protocol parser/ITerminal
   clojure.lang.IPersistentMap
   (matcher [this] (:matcher this))
-  (elide? [this] (let [n (name (term-id this))]
-                   (and (.startsWith n "<")
-                        (.endsWith n ">"))))
   (classes [this] (:classes this #{}))
   (dominates [this] (:dominates this #{}))
   (submits-to [this] (:submits-to this #{})))
@@ -370,15 +351,14 @@
   "Creates a parser for the given productions, using the given options."
   [opts & prods]
   (let [[opts prods] (if (map? opts) [opts prods] [{} (cons opts prods)])
-        {:keys [make-node make-leaf start whitespace terminals]
-         :or {make-node (fn [lhs rhs child-trees]
-                          {:type lhs :children child-trees})
-              make-leaf (fn [token] token)
+        {:keys [node-handler leaf-handler start whitespace terminals]
+         :or {node-handler handler/default-node-handler
+              leaf-handler handler/default-leaf-handler
               start (first prods)
               whitespace #"\s*"
               terminals #{}}} opts
         grammar (make-grammar start terminals prods)]
-    (make-parser grammar whitespace make-leaf make-node)))
+    (make-parser grammar whitespace leaf-handler node-handler)))
 
 ;;;;;;;;;;; Sample Usage ;;;;;;;;;;;;;
 

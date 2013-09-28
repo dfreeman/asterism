@@ -1,7 +1,6 @@
 (ns asterism.core
   (:require [asterism.parser.protocols :as protocols]
             [asterism.parser.generator :as gen]
-            [asterism.util :as util]
             [clojure.string :as string]
             [clojure.set :as set]
             [clojure.pprint :refer [pprint]]
@@ -52,8 +51,8 @@
             
             (transform [rhs]
               (condp #(%1 %2) rhs
-                vector? (util/vec-map transform rhs)
-                set? (util/set-map transform rhs)
+                vector? (mapv transform rhs)
+                set? (set (map transform rhs))
                 keyword? (namespace-local rhs)
                 symbol? (process-binding rhs)
                 rhs))]
@@ -137,21 +136,13 @@
         prod-seq (apply concat (apply merge entity-prods sort-prods inner-prods))]
     `(def ~sym
       ~(apply gen/parser
-        {:make-node (fn [lhs rhs children]
-                      (let [bindings (merge-bindings rhs children)]
-                        (if-let [result (::bind-through bindings)]
-                          result
-                          (if-let [factory (find-factory lhs)]
-                            (factory bindings)
-                            {::bindings bindings}))))
+        {:node-handler (fn [lhs rhs children]
+                         (let [bindings (merge-bindings rhs children)]
+                           (if-let [result (::bind-through bindings)]
+                             result
+                             (if-let [factory (find-factory lhs)]
+                               (factory bindings)
+                               {::bindings bindings}))))
          :start (canonicalize root)
          :terminals terms}
         prod-seq))))
-
-; (defsort Expr (typecheck [this]))
-; (ns asterism.other)
-; (asterism.core/defent-expr EFor ["for" :i "in" :j]
-;   :i ["ok" "cool"]
-;   :j #"gotit"
-;   (typecheck [this] "hello"))
-; (println (asterism.core/typecheck (->EFor)))
