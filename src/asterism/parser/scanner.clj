@@ -1,7 +1,8 @@
 (ns asterism.parser.scanner
   (:require [asterism.parser.protocols :as parser]
             [asterism.util :as util]
-            [clojure.set :as set]))
+            [clojure.set :as set]
+            [slingshot.slingshot :refer [throw+]]))
 
 ;;;;;;;;;;;;;; Matching ;;;;;;;;;;;;;;
 
@@ -40,7 +41,12 @@
 
   clojure.lang.IFn
   (matches? [this input offset type source-info]
-    (this input offset type source-info)))
+    (try
+      (this input offset type source-info)
+      (catch Exception e
+        (throw+ {:type ::matcher-fail
+                 :msg "Exception applying function as matcher"
+                 :cause e})))))
 
 ;;;;;;;;; Terminal Dominance ;;;;;;;;;
 

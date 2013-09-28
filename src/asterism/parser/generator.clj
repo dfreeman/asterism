@@ -54,7 +54,10 @@
                       (let [matcher (matcher-key element)
                             id (generate-id element)]
                         (if (contains? @terminals matcher)
-                          (term-id (get @terminals matcher))
+                          (let [result (term-id (get @terminals matcher))]
+                            (if (instance? clojure.lang.IMeta result)
+                              (with-meta result (meta element))
+                              result))
                           (do 
                             (swap! terminals assoc
                               matcher (make-terminal [id element]))
@@ -261,8 +264,8 @@
 
 (defn make-grammar [start explicit-terminals prods]
   (let [prods (->> prods
-                (concat [:asterism/start start])
                 (apply hash-map)
+                (#(assoc % :asterism/start start))
                 (util/map-map #(normalize %2)))
         nonterminals (set (keys prods))
         [terminals prods] (process-terminals 
@@ -301,7 +304,7 @@
                 possible-tokens (scanner/scan scanner pos lookaheads)
                 num-tokens (count possible-tokens)]
             (cond
-              (= 0 num-tokens)
+              (zero? num-tokens)
                 (throw+ {:type ::no-matching-token :parse-state state})
               (> num-tokens 1)
                 (throw+ {:type ::multiple-matching-tokens

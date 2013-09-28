@@ -1,5 +1,5 @@
 (ns asterism.examples.json
-  (:require [asterism.core :refer [defterm defsort]]
+  (:require [asterism.core :refer [defterm defsort deflang]]
             [asterism.parser.protocols :refer [lexeme]]))
 
 ; This was a quick transliteration from json.org; safety not guaranteed
@@ -10,10 +10,10 @@
   (evaluate [this]))
 
 (defent-expr ENum [^num-lit token]
-  (evaluate [this] (eval (lexeme token))))
+  (evaluate [this] (read-string (lexeme token))))
 
 (defent-expr EString [^str-lit token]
-  (evaluate [this] (eval (lexeme token))))
+  (evaluate [this] (read-string (lexeme token))))
 
 (defent-expr ETrue ["true"]
   (evaluate [this] true))
@@ -35,15 +35,19 @@
   :pair [^str-lit* keys ":" ^Expr* values]
 
   (evaluate [this]
-    (zipmap (map (comp keyword eval lexeme) keys)
+    (zipmap (map (comp keyword read-string lexeme) keys)
             (map evaluate values))))
 
-(deflang json [*ns*]
-  (fn [input] (evaluate input)))
+(deflang json
+  :features [asterism.examples.json]
+  :root Expr)
+
+(defn parse-json [s]
+  (evaluate (json s)))
 
 
-(json "[1, 2, 3]") ;; => [1 2 3]
-(json "{\"a\": [1, true], \"b\": null}") ;; => {:a [1 true] :b nil}
+(parse-json "[1, 2, 3]") ;; => [1 2 3]
+(parse-json "{\"a\": [1, true, \"free\"], \"b\": null}") ;; => {:a [1 true "free"] :b nil}
 
 
 ;;;;;;;;;;;;;;;; Straight-up parser implementation ;;;;;;;;;;;;
