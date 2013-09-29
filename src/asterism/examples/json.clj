@@ -1,6 +1,5 @@
 (ns asterism.examples.json
-  (:require [asterism.core :refer [defterm defsort deflang]]
-            [asterism.parser.protocols :refer [lexeme]]))
+  (:require [asterism.core :refer [defterm defsort deflang]]))
 
 ; This was a quick transliteration from json.org; safety not guaranteed
 (defterm num-lit #"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?")
@@ -10,10 +9,10 @@
   (evaluate [this]))
 
 (defent-expr ENum [^num-lit token]
-  (evaluate [this] (read-string (lexeme token))))
+  (evaluate [this] (read-string (:lexeme token))))
 
 (defent-expr EString [^str-lit token]
-  (evaluate [this] (read-string (lexeme token))))
+  (evaluate [this] (read-string (:lexeme token))))
 
 (defent-expr ETrue ["true"]
   (evaluate [this] true))
@@ -35,7 +34,7 @@
   :pair [^str-lit* keys ":" ^Expr* values]
 
   (evaluate [this]
-    (zipmap (map (comp keyword read-string lexeme) keys)
+    (zipmap (map (comp keyword read-string :lexeme) keys)
             (map evaluate values))))
 
 (deflang json

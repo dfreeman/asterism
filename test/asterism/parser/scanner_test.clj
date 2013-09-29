@@ -1,7 +1,5 @@
 (ns asterism.parser.scanner-test
   (:require [midje.sweet :refer [facts]]
-            [asterism.util :as util]
-            [asterism.parser.protocols :as parser]
             [asterism.parser.scanner :refer :all]))
 
 (facts "on terminal dominance types"
@@ -23,7 +21,7 @@
 (facts "on terminal dominance"
   (let [types (fn [tokens] 
                 (set (for [[offset token] tokens]
-                       (parser/token-type token))))
+                       (:token-type token))))
         scanner (scanner
                   "a ab ac ad"
                   nil

@@ -1,12 +1,7 @@
 (ns asterism.core
-  (:require [asterism.parser.protocols :as protocols]
-            [asterism.parser.generator :as gen]
-            [clojure.string :as string]
+  (:require [asterism.parser :as p]
             [clojure.set :as set]
-            [clojure.pprint :refer [pprint]]
             [slingshot.slingshot :refer [throw+]]))
-
-(defprotocol Entity)
 
 (defn canonicalize [s & [ns]]
   (let [ns (or ns (:ns (meta (resolve s))))]
@@ -22,7 +17,7 @@
 (defmacro defsort [sym & fns]
   `(let [sort-sym# (canonicalize '~sym *ns*)]
     (defprotocol ~sym ~@fns)
-    (defmacro ~(symbol (str "defent-" (string/lower-case sym)))
+    (defmacro ~(symbol (str "defent-" (clojure.string/lower-case sym)))
       ~(str "Defines an entity of the " sym " sort")
       [& body#]
       `(defent ~sort-sym# ~@body#))))
@@ -81,7 +76,6 @@
     `(do
       (alter-meta! *ns* assoc-in [::entities '~(canonicalize entity-sym *ns*)] '~entity-info)
       (defrecord ~entity-sym ~(vec syms)
-        Entity
         ~sort-sym
         ~@impls))))
 
@@ -135,7 +129,7 @@
         inner-prods (map :inner-prods (vals entities))
         prod-seq (apply concat (apply merge entity-prods sort-prods inner-prods))]
     `(def ~sym
-      ~(apply gen/parser
+      ~(apply p/parser
         {:node-handler (fn [lhs rhs children]
                          (let [bindings (merge-bindings rhs children)]
                            (if-let [result (::bind-through bindings)]

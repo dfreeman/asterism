@@ -1,8 +1,6 @@
 (ns asterism.parser.generator
-  (:require [asterism.util :as util]
-            [asterism.parser.protocols :as parser]
-            [asterism.parser.scanner :as scanner]
-            [asterism.parser.handler :as handler]
+  (:require [asterism.util :as u]
+            [asterism.parser.scanner :as s]
             [clojure.set :as set]
             [slingshot.slingshot :refer [throw+]]))
 
@@ -15,14 +13,10 @@
   (let [invalid-term {:type ::invalid-terminal :id id :definition definition}]
     (cond 
       (map? definition)
-        (if (satisfies? parser/IMatcher (:matcher definition))
+        (if (satisfies? s/IMatcher (:matcher definition))
           (vary-meta definition assoc :id id)
           (throw+ (assoc invalid-term :msg "Invalid matcher")))
-      (satisfies? parser/ITerminal definition)
-        (if (instance? clojure.lang.IMeta definition)
-          (vary-meta definition assoc :id id)
-          (throw+ (assoc invalid-term :msg "ITerminals must support metadata")))
-      (satisfies? parser/IMatcher definition)
+      (satisfies? s/IMatcher definition)
         (with-meta {:matcher definition} {:id id})
       :else
         (throw+ invalid-term))))
@@ -40,7 +34,7 @@
   (let [terms (set (map make-terminal raw-terminals))
         by-id (into {} (map #(vector (term-id %) %) terms))
         by-matcher (->> terms
-                     (map #(vector (matcher-key (parser/matcher %)) %))
+                     (map #(vector (matcher-key (:matcher %)) %))
                      (into {}))]
     (merge by-id by-matcher)))
 
@@ -95,7 +89,7 @@
                               :asterism/eof #{:asterism/eof}}
                              (into (map #(vector % #{%}) (keys terminals)))
                              (into (map #(vector % #{}) nonterminals))))]
-    (util/fixed-point
+    (u/fixed-point
       @first-sets
       (fn [start-value]
         (doseq [[lhs rhs-set] productions
@@ -242,13 +236,13 @@
               (map #(normalize %))
               (vec)
               (reduce append-all #{[]})
-              util/set-flatten))
+              u/set-flatten))
 
           (normalize-set [s]
             (->> s
               (map #(normalize %))
               (set)
-              util/set-flatten))
+              u/set-flatten))
 
           (normalize-node [x] #{[x]})]
 
@@ -267,7 +261,7 @@
           la
           (nth rhs pos))))
     (set)
-    util/set-flatten))
+    u/set-flatten))
 
 (defn make-grammar [start explicit-terminals prods]
   (let [prods (->> prods
@@ -284,18 +278,18 @@
      :nonterminals nonterminals
      :productions prods}))
 
-(defn- make-parser [grammar whitespace on-shift on-reduce]
+(defn make-parser [grammar whitespace on-shift on-reduce]
   (let [firsts (generate-first-sets grammar)
         cc0 (cc0 firsts grammar)
         {:keys [action-table goto-table]} (build-tables cc0 firsts grammar)]
     (fn [input]
       (let [terminals (:terminals grammar)
-            scanner (scanner/scanner input whitespace terminals)]
+            scanner (s/scanner input whitespace terminals)]
         (loop [pos 0
                stack (list [cc0 ::start])]
           (let [[state tree] (first stack)
                 lookaheads (valid-lookaheads state)
-                possible-tokens (scanner/scan scanner pos lookaheads)
+                possible-tokens (s/scan scanner pos lookaheads)
                 num-tokens (count possible-tokens)]
             (cond
               (zero? num-tokens)
@@ -306,7 +300,7 @@
                          :tokens (set (map second possible-tokens))})
               :else
                 (let [[pos' token] (first possible-tokens)
-                      token-type (parser/token-type token)
+                      token-type (:token-type token)
                       table-value (get-in action-table [state token-type])
                       action (get-action table-value)]
                   (case action
@@ -335,40 +329,3 @@
                     (throw+ {:type ::no-table-action
                              :state-table state
                              :token token}))))))))))
-
-;;;;;;;;;;;;;;; Models ;;;;;;;;;;;;;;;
-
-(extend-protocol parser/ITerminal
-  clojure.lang.IPersistentMap
-  (matcher [this] (:matcher this))
-  (classes [this] (:classes this #{}))
-  (dominates [this] (:dominates this #{}))
-  (submits-to [this] (:submits-to this #{})))
-
-;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;;
-
-(defn parser
-  "Creates a parser for the given productions, using the given options."
-  [opts & prods]
-  (let [[opts prods] (if (map? opts) [opts prods] [{} (cons opts prods)])
-        {:keys [node-handler leaf-handler start whitespace terminals]
-         :or {node-handler handler/default-node-handler
-              leaf-handler handler/default-leaf-handler
-              start (first prods)
-              whitespace #"\s*"
-              terminals #{}}} opts
-        grammar (make-grammar start terminals prods)]
-    (make-parser grammar whitespace leaf-handler node-handler)))
-
-;;;;;;;;;;; Sample Usage ;;;;;;;;;;;;;
-
-; Recognizes simple arithmetic expressions w/ standard OoO
-(defn simple-expression-parser []
-  (parser
-    :expr #{[:expr #{"+" "-"} :term]
-            :term}
-    :term #{[:term #{"*" "/"} :factor]
-            :factor}
-    :factor #{["(" :expr ")"]
-              #"\d+"
-              #"[a-zA-Z]\w*"}))

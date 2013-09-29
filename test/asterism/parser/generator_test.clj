@@ -1,6 +1,5 @@
 (ns asterism.parser.generator-test
   (:require [midje.sweet :refer [facts contains exactly throws]]
-            [asterism.parser.protocols :as parser]
             [asterism.parser.generator :refer :all]))
 
 ; Recognizes strings of the form (^n )^n +
