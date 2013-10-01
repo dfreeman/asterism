@@ -23,13 +23,16 @@
 
 (facts "on combining middleware"
   (let [remove? #(let [n (name %)] (and (.startsWith n "<") (.endsWith n ">")))
-        p (parser {:terminals {:ident #"[a-zA-Z]\w*"}
+        p (parser {:terminals {:<lbrack> "["
+                               :<rbrack> "]"
+                               :<sep> ","
+                               :ident #"[a-zA-Z]\w*"}
                    :node-handler (->> default-node-handler
                                       (collapse-prods remove?)
                                       (elide-terms remove?))}
-            :list :<list>
-            :<list> #{[:<list> :<item>] :<item>}
+            :list ["[" :<list> "]"]
+            :<list> #{[:<list> "," :<item>] :<item>}
             :<item> :ident)
-        tree (p "a bc d")]
+        tree (p "[a, bc, d]")]
     (:type tree) => :list
     (map :lexeme (:children tree)) => ["a" "bc" "d"]))
