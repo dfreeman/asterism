@@ -4,9 +4,13 @@
             [slingshot.slingshot :refer [throw+]]))
 
 (defn canonicalize [s & [ns]]
-  (let [ns (or ns (:ns (meta (resolve s))))]
-    (symbol (str (ns-name ns))
-            (str (name s)))))
+  (try
+    (let [ns (or ns (:ns (meta (resolve s))))]
+      (symbol (str (ns-name ns))
+              (str (name s))))
+    (catch Exception e
+      (throw+ {:type ::unresolvable-symbol
+               :msg (str "Unable to resolve symbol: " s)}))))
 
 (defmacro defterm [sym matcher & {:as config}]
   (let [term (assoc config :matcher matcher)]
@@ -15,12 +19,7 @@
       (def ~sym ~term))))
 
 (defmacro defsort [sym & fns]
-  `(let [sort-sym# (canonicalize '~sym *ns*)]
-    (defprotocol ~sym ~@fns)
-    (defmacro ~(symbol (str "defent-" (clojure.string/lower-case sym)))
-      ~(str "Defines an entity of the " sym " sort")
-      [& body#]
-      `(defent ~sort-sym# ~@body#))))
+  `(defprotocol ^::sort ~sym ~@fns))
 
 
 ; ^Expr* name => ^{::bind name ::multi true} 'Expr
@@ -36,11 +35,12 @@
                 (let [tag-name (name tag)
                       multi (.endsWith tag-name "*")
                       len (count tag-name)
+                      tag-ns (namespace tag)
                       tag-name (if multi (.substring tag-name 0 (dec len)) tag-name)
                       sym (vary-meta sym dissoc :tag)]
                   (swap! syms conj sym)
                   (with-meta
-                    (canonicalize (symbol tag-name))
+                    (canonicalize (symbol tag-ns tag-name))
                     {::bind sym ::multi multi}))
                 (canonicalize sym)))
             
@@ -57,17 +57,17 @@
         @syms))))
 
 
-(defn extract-inline-map
-  ([forms] (extract-inline-map forms {}))
+(defn parse-entity-def
+  ([forms] (parse-entity-def forms {}))
   ([[k v & forms :as impls] prods]
     (if (keyword? k)
       (recur forms (assoc prods k v))
-      [prods impls])))
+      [prods (first impls) (rest impls)])))
 
-(defmacro defent
+(defmacro defentity
   "Defines an entity of the given sort"
-  [sort-sym entity-sym rhs & impls]
-  (let [[inner-prods impls] (extract-inline-map impls)
+  [entity-sym rhs & impls]
+  (let [[inner-prods sort-sym impls] (parse-entity-def impls)
         [rhs inner-prods syms] (process-bindings entity-sym rhs inner-prods)
         canonical-sort (canonicalize sort-sym)
         entity-info {:rhs rhs
@@ -78,7 +78,6 @@
       (defrecord ~entity-sym ~(vec syms)
         ~sort-sym
         ~@impls))))
-
 
 (defn resolve-feature [s]
   (try (require s) (catch Throwable e))

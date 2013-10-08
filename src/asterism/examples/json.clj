@@ -1,45 +1,50 @@
 (ns asterism.examples.json
-  (:require [asterism.core :refer [defterm defsort deflang]]))
+  (:require [asterism.core :refer [defsort defentity deflang]]
+            [asterism.examples.core :as core]))
 
-; This was a quick transliteration from json.org; safety not guaranteed
-(defterm num-lit #"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?")
-(defterm str-lit #"\"(?:[^\"\\]|\\[\\\"/bfnrt]|\\u[0-9a-f]{4})*\"")          ;" dumb syntax highlighting
+(defsort Expression
+  (evaluate [this] "Evaluates this expression"))
 
-(defsort Expr
-  (evaluate [this]))
-
-(defent-expr ENum [^num-lit token]
+(defentity ENum [^core/num-lit token]
+  Expression
   (evaluate [this] (read-string (:lexeme token))))
 
-(defent-expr EString [^str-lit token]
+(defentity EString [^core/str-lit token]
+  Expression
   (evaluate [this] (read-string (:lexeme token))))
 
-(defent-expr ETrue ["true"]
+(defentity ETrue ["true"]
+  Expression
   (evaluate [this] true))
 
-(defent-expr EFalse ["false"]
+(defentity EFalse ["false"]
+  Expression
   (evaluate [this] false))
 
-(defent-expr ENull ["null"]
+(defentity ENull ["null"]
+  Expression
   (evaluate [this] nil))
 
-(defent-expr EList #{["[" "]"] ["[" :items "]"]}
+(defentity EList #{["[" "]"] ["[" :items "]"]}
   :items #{:item [:item "," :items]}
-  :item ^Expr* elements
+  :item ^Expression* elements
 
+  Expression
   (evaluate [this] (map evaluate elements)))
 
-(defent-expr EDict #{["{" "}"] ["{" :pairs "}"]}
+(defentity EDict #{["{" "}"] ["{" :pairs "}"]}
   :pairs #{:pair [:pair "," :pairs]}
-  :pair [^str-lit* keys ":" ^Expr* values]
+  :pair [^core/str-lit* keys ":" ^Expression* values]
 
+  Expression
   (evaluate [this]
     (zipmap (map (comp keyword read-string :lexeme) keys)
             (map evaluate values))))
 
 (deflang json
-  :features [asterism.examples.json]
-  :root Expr)
+  :features [asterism.examples.core
+             asterism.examples.json]
+  :root Expression)
 
 (defn parse-json [s]
   (evaluate (json s)))
