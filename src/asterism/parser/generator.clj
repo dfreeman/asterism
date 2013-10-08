@@ -1,23 +1,23 @@
 (ns asterism.parser.generator
+  "A canonical LR(1) parser generator with a couple of tweaks. Namely, it is built to work with
+  a context-aware scanner, and has a basic notion of operator associativity and precedence."
   (:require [asterism.util :as u]
             [asterism.parser.scanner :as s]
             [clojure.set :as set]
+            [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [throw+]]))
 
 ;;;;;;;; Terminal Processing ;;;;;;;;;
-
-(defn- term-id [terminal]
-  (:id (meta terminal)))
 
 (defn make-terminal [[id definition]]
   (let [invalid-term {:type ::invalid-terminal :id id :definition definition}]
     (cond 
       (map? definition)
-        (if (satisfies? s/IMatcher (:matcher definition))
-          (vary-meta definition assoc :id id)
+        (if (satisfies? s/Matcher (:matcher definition))
+          (assoc definition :id id)
           (throw+ (assoc invalid-term :msg "Invalid matcher")))
-      (satisfies? s/IMatcher definition)
-        (with-meta {:matcher definition} {:id id})
+      (satisfies? s/Matcher definition)
+        {:id id :matcher definition}
       :else
         (throw+ invalid-term))))
 
@@ -32,7 +32,7 @@
 
 (defn- terminal-lookup [raw-terminals]
   (let [terms (set (map make-terminal raw-terminals))
-        by-id (into {} (map #(vector (term-id %) %) terms))
+        by-id (into {} (map #(vector (:id %) %) terms))
         by-matcher (->> terms
                      (map #(vector (matcher-key (:matcher %)) %))
                      (into {}))]
@@ -50,7 +50,7 @@
                       (let [matcher (matcher-key element)
                             id (generate-id element)]
                         (if (contains? @terminals matcher)
-                          (let [result (term-id (get @terminals matcher))]
+                          (let [result (:id (get @terminals matcher))]
                             (if (instance? clojure.lang.IMeta result)
                               (with-meta result (meta element))
                               result))
@@ -59,7 +59,7 @@
                               matcher (make-terminal [id element]))
                             id))))))))]))
         terminals (->> @terminals
-                    (map (fn [[matcher term]] [(term-id term) term]))
+                    (map (fn [[matcher term]] [(:id term) term]))
                     (into {}))]
     [terminals prods]))
 
@@ -174,28 +174,28 @@
 
 ;;;;;;; LR(1) Table Generation ;;;;;;;
 
-(defn- get-action [table-value]
-  (if (sequential? table-value)
-    (first table-value)
-    table-value))
-
 (defn build-tables
   "Builds action and goto tables for the given grammar"
   [cc0 firsts grammar]
   (let [cc (cc cc0 firsts grammar)
         action-table (atom {})
         goto-table (atom {})
+        terminals (:terminals grammar)
         update-action-table!
           (fn [state la value]
-            (let [existing (get-in @action-table [state la])]
-              (cond
-                (nil? existing)
-                  (swap! action-table assoc-in [state la] value)
-                (not= existing value)
+            (let [existing (get-in @action-table [state la])
+                  la-term (get terminals la)]
+              ; TODO there are probably cases on both sides of this that need further
+              ; consideration. Don't necessarily want to reject a grammar outright for having
+              ; a shift/reduce conflict -- often just choosing the shift is fine.
+              (cond 
+                (or (nil? existing) (:operator la-term))
+                  (swap! action-table update-in [state la] set/union #{value})
+                (not= existing #{value})
                   (throw+ {:type ::table-conflict
                            :state state
                            :lookahead la
-                           :values #{existing value}}))))]
+                           :values (set/union existing #{value})}))))]
     (doseq [cc-i cc]
       (doseq [[lhs rhs pos la] cc-i]
         (cond ; shift
@@ -212,13 +212,43 @@
               (and (= pos (count rhs))
                    (= lhs (:start grammar))
                    (= la :asterism/eof))
-                (update-action-table! cc-i :asterism/eof :accept)))
+                (update-action-table! cc-i :asterism/eof [:accept])))
       (doseq [n (:nonterminals grammar)]
         (let [cc-j (goto cc-i n firsts grammar)]
           (when-not (empty? cc-j)
             (swap! goto-table assoc-in [cc-i n] cc-j)))))
     {:action-table @action-table
      :goto-table @goto-table}))
+
+(defn resolve-action
+  "Resolves which table action should be followed when two are available"
+  [actions prev-token prev-op next-token next-op]
+  (if (= (count actions) 1)
+    (first actions)
+    (let [shifts (filter #(= (first %) :shift) actions)
+          reduces (filter #(= (first %) :reduce) actions)]
+      (cond
+        (not= (count shifts) (count reduces) 1)
+          (throw+ {:type ::shift-reduce-ambiguity
+                   :msg "Pretty sure this can only resolve shift-reduce conflicts"
+                   :actions actions})
+        (or (nil? prev-op) (nil? next-op))
+          (throw+ {:type ::ambiguous-parse
+                   :msg "You should really fix that"})
+        :else
+          (let [[shift-action] shifts
+                [reduce-action] reduces
+                lprec (s/precedence prev-op prev-token)
+                rprec (s/precedence next-op next-token)]
+            (cond
+              (< lprec rprec) reduce-action
+              (> lprec rprec) shift-action
+              :else (case (s/associativity next-op next-token)
+                      :right shift-action
+                      :left reduce-action
+                      (throw+ {:type ::nonassociative-operator
+                               :msg "Found a sequence of nonassociative operators"
+                               :ops [prev-op next-op]}))))))))
 
 ;;;;;; Production Normalization ;;;;;;
 
@@ -253,14 +283,15 @@
 
 ;;;;;;;;;;;;;;;; Setup ;;;;;;;;;;;;;;;
 
-(defn valid-lookaheads [state]
+(defn valid-lookaheads [terminals state]
   (->> state
     (map
       (fn [[_ rhs pos la]]
         (if (= pos (count rhs))
           la
           (nth rhs pos))))
-    (set)
+    (filter terminals)
+    set
     u/set-flatten))
 
 (defn make-grammar [start explicit-terminals prods]
@@ -278,6 +309,8 @@
      :nonterminals nonterminals
      :productions prods}))
 
+; stack elements are [state payload token?]
+; for 
 (defn make-parser [grammar whitespace on-shift on-reduce]
   (let [firsts (generate-first-sets grammar)
         cc0 (cc0 firsts grammar)
@@ -286,9 +319,9 @@
       (let [terminals (:terminals grammar)
             scanner (s/scanner input whitespace terminals)]
         (loop [pos 0
-               stack (list [cc0 ::start])]
-          (let [[state tree] (first stack)
-                lookaheads (valid-lookaheads state)
+               stack (list {:state cc0 :payload ::start})]
+          (let [state (:state (first stack))
+                lookaheads (valid-lookaheads terminals state)
                 possible-tokens (s/scan scanner pos lookaheads)
                 num-tokens (count possible-tokens)]
             (cond
@@ -301,12 +334,16 @@
               :else
                 (let [[pos' token] (first possible-tokens)
                       token-type (:token-type token)
-                      table-value (get-in action-table [state token-type])
-                      action (get-action table-value)]
+                      next-op (:operator (get terminals token-type))
+                      prev-token (:payload (second stack))
+                      prev-op (:operator (:term (second stack)))
+                      table-values (get-in action-table [state token-type])
+                      table-value (resolve-action table-values prev-token prev-op token next-op)
+                      action (first table-value)]
                   (case action
                     :accept
                       (if (= token-type :asterism/eof)
-                        (second (first stack))
+                        (:payload (first stack))
                         (throw+ {:type ::extra-input
                                  :parser-state state 
                                  :token token}))
@@ -314,17 +351,19 @@
                     :reduce
                       (let [[_ lhs rhs] table-value
                             [popped remaining] (split-at (count rhs) stack)
-                            state' (get-in goto-table [(ffirst remaining) lhs])
+                            state' (get-in goto-table [(:state (first remaining)) lhs])
                             children (->> popped
-                                          (map second)
+                                          (map :payload)
                                           reverse
                                           flatten)
                             node (on-reduce lhs rhs children)]
-                        (recur pos (conj remaining [state' node])))
+                        (recur pos (conj remaining {:state state' :payload node})))
 
                     :shift
                       (let [[_ next-state] table-value]
-                        (recur pos' (conj stack [next-state (on-shift token)])))
+                        (recur pos' (conj stack {:state next-state
+                                                 :payload (on-shift token)
+                                                 :term (get terminals (:token-type token))})))
 
                     (throw+ {:type ::no-table-action
                              :state-table state

@@ -5,7 +5,7 @@
 
 ;;;;;;;;;;;;;; Matching ;;;;;;;;;;;;;;
 
-(defprotocol IMatcher
+(defprotocol Matcher
   "Matchers provide a means for the scanner to consume tokens in an input stream.
   Strings and Pattern instances are both matchers that behave in the intuitive way;
   functions as matchers are treated as their own implementation of `matches?`"
@@ -19,9 +19,9 @@
       :info (optional) any additional source information that should be attached to the
         token produced (e.g. a Pattern's match groups)"))
 
-(extend-protocol IMatcher
+(extend-protocol Matcher
   nil
-  (matches? [this _ _] nil)
+  (matches? [_ _ _] nil)
 
   java.lang.String
   (matches? [this input offset]
@@ -45,6 +45,34 @@
         (throw+ {:type ::matcher-fail
                  :msg "Exception applying function as matcher"
                  :cause e})))))
+
+;;;;;;;;;;;;;; Operators ;;;;;;;;;;;;;
+
+(defprotocol Operator
+  "The Operator protocol allows a terminal to express how it will behaves (if at all)
+  as an operator by defining its precedence and associativity. Maps are assumed to be
+  to be constant operator declarations with keys :prec and :assoc"
+  (precedence [this token]
+    "Returns the precedence of this operator, a number.
+    An operator with a lower precedence will bind 'more tightly' than a higher one.
+    For example, if '+' has precedence 4 and '*' has precedence 3, then the typical
+    arithmetic order of operations would be observed where those operators interact:
+       1 + 2 * 3 + 4  ==  1 + (2 * 3) + 4  ==  11")
+  (associativity [this token]
+    "Returns the fixity of this operator, one of :left, :right, or nil.
+    Breaks ties among a sequence of operators all having the same precedence. For
+    example, subtraction is typically left-associative:
+      4 - 2 - 1  ==  (4 - 2) - 1  ==  1
+    Exponentiation, on the other hand, is typically right-associative:
+      2 ^ 3 ^ 2  ==  2 ^ (3 ^ 2)  ==  512
+    Note that all operators of a given precedence must have the same associativity,
+    and that the parser will consider it an error if two or more nonassociative
+    operators are found in sequence."))
+
+(extend-protocol Operator
+  clojure.lang.IPersistentMap
+  (precedence [this _] (:prec this))
+  (associativity [this _] (:assoc this)))
 
 ;;;;;;;;; Terminal Dominance ;;;;;;;;;
 

@@ -156,25 +156,25 @@
         {:keys [action-table goto-table]} 
           (build-tables cc0 paren-firsts paren-grammar)
         actions {
-          0 {:lparen [:shift (paren-cc 3)]}
-          1 {:asterism/eof :accept
-             :lparen [:shift (paren-cc 3)]}
-          2 {:asterism/eof [:reduce :list [:pair]]
-             :lparen [:reduce :list [:pair]]}
-          3 {:lparen [:shift (paren-cc 6)]
-             :rparen [:shift (paren-cc 7)]}
-          4 {:asterism/eof [:reduce :list [:list :pair]]
-             :lparen [:reduce :list [:list :pair]]}
-          5 {:rparen [:shift (paren-cc 8)]}
-          6 {:lparen [:shift (paren-cc 6)]
-             :rparen [:shift (paren-cc 10)]}
-          7 {:asterism/eof [:reduce :pair [:lparen :rparen]]
-             :lparen [:reduce :pair [:lparen :rparen]]}
-          8 {:asterism/eof [:reduce :pair [:lparen :pair :rparen]]
-             :lparen [:reduce :pair [:lparen :pair :rparen]]}
-          9 {:rparen [:shift (paren-cc 11)]}
-          10 {:rparen [:reduce :pair [:lparen :rparen]]}
-          11 {:rparen [:reduce :pair [:lparen :pair :rparen]]}}
+          0 {:lparen #{[:shift (paren-cc 3)]}}
+          1 {:asterism/eof #{[:accept]}
+             :lparen #{[:shift (paren-cc 3)]}}
+          2 {:asterism/eof #{[:reduce :list [:pair]]}
+             :lparen #{[:reduce :list [:pair]]}}
+          3 {:lparen #{[:shift (paren-cc 6)]}
+             :rparen #{[:shift (paren-cc 7)]}}
+          4 {:asterism/eof #{[:reduce :list [:list :pair]]}
+             :lparen #{[:reduce :list [:list :pair]]}}
+          5 {:rparen #{[:shift (paren-cc 8)]}}
+          6 {:lparen #{[:shift (paren-cc 6)]}
+             :rparen #{[:shift (paren-cc 10)]}}
+          7 {:asterism/eof #{[:reduce :pair [:lparen :rparen]]}
+             :lparen #{[:reduce :pair [:lparen :rparen]]}}
+          8 {:asterism/eof #{[:reduce :pair [:lparen :pair :rparen]]}
+             :lparen #{[:reduce :pair [:lparen :pair :rparen]]}}
+          9 {:rparen #{[:shift (paren-cc 11)]}}
+          10 {:rparen #{[:reduce :pair [:lparen :rparen]]}}
+          11 {:rparen #{[:reduce :pair [:lparen :pair :rparen]]}}}
         gotos {
           0 {:list (paren-cc 1)
              :pair (paren-cc 2)}
