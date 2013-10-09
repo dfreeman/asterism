@@ -1,7 +1,8 @@
 (ns asterism.parser
-  (require [asterism.parser [generator :as g]]))
+  (require [asterism.parser [generator :refer [make-parser]]
+                            [grammar :refer [make-grammar]]]))
 
-(defn default-leaf-handler [x] x)
+(def default-leaf-handler identity)
 
 (defn default-node-handler [lhs rhs children]
   {:type lhs :children children})
@@ -21,11 +22,11 @@
   "Creates a parser for the given productions, using the given options."
   [opts & prods]
   (let [[opts prods] (if (map? opts) [opts prods] [{} (cons opts prods)])
-        {:keys [node-handler leaf-handler start whitespace terminals]
+        {:keys [node-handler leaf-handler disambiguators start whitespace terminals]
          :or {node-handler default-node-handler
               leaf-handler default-leaf-handler
               start (first prods)
               whitespace #"\s*"
               terminals {}}} opts
-        grammar (g/make-grammar start terminals prods)]
-    (g/make-parser grammar whitespace leaf-handler node-handler)))
+        grammar (make-grammar start terminals prods)]
+    (make-parser grammar whitespace leaf-handler node-handler)))
