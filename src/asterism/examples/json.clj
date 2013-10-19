@@ -51,7 +51,7 @@
 
 
 (parse-json "[1, 2, 3]") ;; => [1 2 3]
-(parse-json "{\"a\": [1, true, \"free\"], \"b\": null}") ;; => {:a [1 true "free"] :b nil}
+(parse-json "{\"a\": [\"won\", true, 3], \"b\": null}") ;; => {:a ["won" true 3] :b nil}
 
 
 ;;;;;;;;;;;;;;;; Straight-up parser implementation ;;;;;;;;;;;;

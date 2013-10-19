@@ -1,6 +1,6 @@
 (ns asterism.parser.generator
   "A canonical LR(1) parser generator with a couple of tweaks. Namely, it is built to work with
-  a context-aware scanner, and has a basic notion of operator associativity and precedence."
+  a context-aware scanner, and has a pluggable means of resolving ambiguous grammars."
   (:require [asterism.util :as u]
             [asterism.parser.scanner :as s]
             [clojure.set :as set]
@@ -116,11 +116,57 @@
           (remove nil?)
           set)))))
 
+;;;;;;;;;;; Disambiguation ;;;;;;;;;;;
+
+(defprotocol Disambiguator
+  (discerns? [this state lookahead actions])
+  (disambiguate [this stack state token actions]))
+
+(defn- find-disambiguators
+  "Traverses an action table, locating appropriate disambiguators when table conflicts are found
+  or throwing an exception if a conflict is found that can't be disambiguated."
+  [table disambiguators]
+  (letfn [(find-disambiguator [[state lookahead] actions]
+            (if (= (count actions) 1)
+              (first actions)
+              (or (some #(when (discerns? % state lookahead actions) [:ambi % actions])
+                        disambiguators)
+                  (throw+ {:type ::table-conflict
+                           :state state
+                           :lookahead lookahead
+                           :actions actions}))))]
+    (->> table
+      (reduce-kv
+        (fn [acc k v] (concat acc (map #(vector k %) (keys v))))
+        ())
+      (reduce
+        (fn [acc key-path]
+          (let [actions (get-in table key-path)]
+            (assoc-in acc key-path (find-disambiguator key-path actions))))
+        {}))))
+
+(defn- resolve-action
+  "Resolves a table entry into either a shift, reduce, or accept action."
+  [stack table state token]
+  (let [token-type (:token-type token)
+        [action :as entry] (get-in table [state token-type])]
+    (case action
+      :ambi
+        (let [[_ disambiguator actions] entry]
+          (disambiguate disambiguator stack state token actions))
+
+      nil
+        (throw+ {:type ::no-table-action
+                 :state-table state
+                 :token token})
+
+      entry)))
+
 ;;;;;;; LR(1) Table Generation ;;;;;;;
 
 (defn build-tables
   "Builds action and goto tables for the given grammar"
-  [cc0 firsts grammar]
+  [cc0 firsts grammar disambiguators]
   (let [cc (cc cc0 firsts grammar)
         action-table (atom {})
         goto-table (atom {})
@@ -129,14 +175,7 @@
           (fn [state la value]
             (let [existing (get-in @action-table [state la])
                   la-term (get terminals la)]
-              (cond
-                (or (nil? existing) (:operator la-term))
-                  (swap! action-table update-in [state la] set/union #{value})
-                (not= existing #{value})
-                  (throw+ {:type ::table-conflict
-                           :state state
-                           :lookahead la
-                           :values (set/union existing #{value})}))))]
+              (swap! action-table update-in [state la] set/union #{value})))]
     (doseq [cc-i cc]
       (doseq [[lhs rhs pos la] cc-i]
         (cond ; shift
@@ -158,38 +197,38 @@
         (let [cc-j (goto cc-i n firsts grammar)]
           (when-not (empty? cc-j)
             (swap! goto-table assoc-in [cc-i n] cc-j)))))
-    {:action-table @action-table
+    {:action-table (find-disambiguators @action-table disambiguators)
      :goto-table @goto-table}))
 
-(defn resolve-action
-  "Resolves which table action should be followed when two are available"
-  [actions prev-token prev-op next-token next-op]
-  (if (= (count actions) 1)
-    (first actions)
-    (let [shifts (filter #(= (first %) :shift) actions)
-          reduces (filter #(= (first %) :reduce) actions)]
-      (cond
-        (not= (count shifts) (count reduces) 1)
-          (throw+ {:type ::shift-reduce-ambiguity
-                   :msg "Pretty sure this can only resolve shift-reduce conflicts"
-                   :actions actions})
-        (or (nil? prev-op) (nil? next-op))
-          (throw+ {:type ::ambiguous-parse
-                   :msg "You should really fix that"})
-        :else
-          (let [[shift-action] shifts
-                [reduce-action] reduces
-                lprec (s/precedence prev-op prev-token)
-                rprec (s/precedence next-op next-token)]
-            (cond
-              (< lprec rprec) reduce-action
-              (> lprec rprec) shift-action
-              :else (case (s/associativity next-op next-token)
-                      :right shift-action
-                      :left reduce-action
-                      (throw+ {:type ::nonassociative-operator
-                               :msg "Found a sequence of nonassociative operators"
-                               :ops [prev-op next-op]}))))))))
+; (defn resolve-action
+;   "Resolves which table action should be followed when two are available"
+;   [actions prev-token prev-op next-token next-op]
+;   (if (= (count actions) 1)
+;     (first actions)
+;     (let [shifts (filter #(= (first %) :shift) actions)
+;           reduces (filter #(= (first %) :reduce) actions)]
+;       (cond
+;         (not= (count shifts) (count reduces) 1)
+;           (throw+ {:type ::shift-reduce-ambiguity
+;                    :msg "Pretty sure this can only resolve shift-reduce conflicts"
+;                    :actions actions})
+;         (or (nil? prev-op) (nil? next-op))
+;           (throw+ {:type ::ambiguous-parse
+;                    :msg "You should really fix that"})
+;         :else
+;           (let [[shift-action] shifts
+;                 [reduce-action] reduces
+;                 lprec (s/precedence prev-op prev-token)
+;                 rprec (s/precedence next-op next-token)]
+;             (cond
+;               (< lprec rprec) reduce-action
+;               (> lprec rprec) shift-action
+;               :else (case (s/associativity next-op next-token)
+;                       :right shift-action
+;                       :left reduce-action
+;                       (throw+ {:type ::nonassociative-operator
+;                                :msg "Found a sequence of nonassociative operators"
+;                                :ops [prev-op next-op]}))))))))
 
 ;;;;;;;;;;;;;;;; Setup ;;;;;;;;;;;;;;;
 
@@ -204,11 +243,10 @@
     set
     u/set-flatten))
 
-; stack elements are [state payload token?]
 (defn make-parser [grammar whitespace on-shift on-reduce]
   (let [firsts (generate-first-sets grammar)
         cc0 (cc0 firsts grammar)
-        {:keys [action-table goto-table]} (build-tables cc0 firsts grammar)]
+        {:keys [action-table goto-table]} (build-tables cc0 firsts grammar nil)]
     (fn [input]
       (let [terminals (:terminals grammar)
             scanner (s/scanner input whitespace terminals)]
@@ -228,12 +266,7 @@
               :else
                 (let [[pos' token] (first possible-tokens)
                       token-type (:token-type token)
-                      next-op (:operator (get terminals token-type))
-                      prev-token (:payload (second stack))
-                      prev-op (:operator (:term (second stack)))
-                      table-values (get-in action-table [state token-type])
-                      table-value (resolve-action table-values prev-token prev-op token next-op)
-                      action (first table-value)]
+                      [action :as entry] (resolve-action stack action-table state token)]
                   (case action
                     :accept
                       (if (= token-type :asterism/eof)
@@ -243,7 +276,7 @@
                                  :token token}))
 
                     :reduce
-                      (let [[_ lhs rhs] table-value
+                      (let [[_ lhs rhs] entry
                             [popped remaining] (split-at (count rhs) stack)
                             state' (get-in goto-table [(:state (first remaining)) lhs])
                             children (->> popped
@@ -254,11 +287,8 @@
                         (recur pos (conj remaining {:state state' :payload node})))
 
                     :shift
-                      (let [[_ next-state] table-value]
-                        (recur pos' (conj stack {:state next-state
-                                                 :payload (on-shift token)
-                                                 :term (get terminals (:token-type token))})))
-
-                    (throw+ {:type ::no-table-action
-                             :state-table state
-                             :token token}))))))))))
+                      (let [[_ next-state] entry]
+                        (recur pos'
+                          (conj stack {:state next-state
+                                       :payload (on-shift token)
+                                       :term (get terminals token-type)}))))))))))))
