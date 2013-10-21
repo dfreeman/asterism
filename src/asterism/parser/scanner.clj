@@ -83,8 +83,8 @@
         b-classes (into #{b-id} (:classes b-term))
         a-dominates (set (:dominates a-term))
         b-submits-to (set (:submits-to b-term))]
-    (or (not (empty? (set/intersection a-classes b-submits-to)))
-        (not (empty? (set/intersection b-classes a-dominates))))))
+    (boolean (or (seq (set/intersection a-classes b-submits-to))
+                 (seq (set/intersection b-classes a-dominates))))))
 
 (defn- full-dominance-set [dom-map ids]
   (apply set/union
@@ -121,7 +121,8 @@
     group))
 
 (defn- find-matches [terminals input offset valid-lookahead]
-  (->> 
+  (remove
+    nil? 
     (for [id valid-lookahead]
       (when-let [terminal (get terminals id)]
         (let [matcher (:matcher terminal)
@@ -132,8 +133,7 @@
                 (or (not= consumed 0) (= id :asterism/empty)))
               {:token-type id
                :lexeme lexeme
-               :source-info source-info}))))
-    (filter identity)))
+               :source-info source-info}))))))
 
 ;;;;;;;;;;;;;;; Public ;;;;;;;;;;;;;;;
 

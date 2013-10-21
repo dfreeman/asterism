@@ -73,15 +73,15 @@
 
           (normalize-vec [v]
             (->> v
-              (map #(normalize %))
-              (vec)
+              (map normalize)
+              vec
               (reduce append-all #{[]})
               u/set-flatten))
 
           (normalize-set [s]
             (->> s
-              (map #(normalize %))
-              (set)
+              (map normalize)
+              set
               u/set-flatten))
 
           (normalize-node [x] #{[x]})]

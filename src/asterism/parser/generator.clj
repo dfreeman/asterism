@@ -195,7 +195,7 @@
                 (update-action-table! cc-i :asterism/eof [:accept])))
       (doseq [n (:nonterminals grammar)]
         (let [cc-j (goto cc-i n firsts grammar)]
-          (when-not (empty? cc-j)
+          (when (seq cc-j)
             (swap! goto-table assoc-in [cc-i n] cc-j)))))
     {:action-table (find-disambiguators @action-table disambiguators)
      :goto-table @goto-table}))
